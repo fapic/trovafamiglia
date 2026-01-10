@@ -1,4 +1,5 @@
 .agent/
+!.agent/workflows/
 .DS_Store
 node_modules/
 .env

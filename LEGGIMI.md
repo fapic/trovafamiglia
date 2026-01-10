@@ -34,3 +34,12 @@ ALTER TABLE family_tracker ADD COLUMN IF NOT EXISTS device_id TEXT;
 3. **Mappa**:
    - I nomi vicini vengono raggruppati per non sovrapporsi.
    - Zooma per vedere i dettagli.
+
+---
+
+## 🚀 Stato del Deploy
+Questa applicazione è configurata per il **Deploy Automatico**:
+- **Repository**: [fapic/trovafamiglia](https://github.com/fapic/trovafamiglia) (GitHub)
+- **Hosting**: [https://trovafamiglia.netlify.app](https://trovafamiglia.netlify.app)
+- **Processo**: Ogni modifica caricata sul ramo `main` viene pubblicata istantaneamente su Netlify.
+
