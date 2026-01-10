@@ -40,6 +40,6 @@ ALTER TABLE family_tracker ADD COLUMN IF NOT EXISTS device_id TEXT;
 ## 🚀 Stato del Deploy
 Questa applicazione è configurata per il **Deploy Automatico**:
 - **Repository**: [fapic/trovafamiglia](https://github.com/fapic/trovafamiglia) (GitHub)
-- **Hosting**: [https://trovafamiglia.netlify.app](https://trovafamiglia.netlify.app)
+- **Hosting**: [https://trovafamiglia.vercel.app](https://trovafamiglia.vercel.app)
 - **Processo**: Ogni modifica caricata sul ramo `main` viene pubblicata istantaneamente su Netlify.
 
