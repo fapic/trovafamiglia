@@ -4,10 +4,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TrovaFamiglia</title>
+    <title>TrovaFamiglia v2.0</title>
 
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 
     <!-- Leaflet Maps -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -571,6 +572,7 @@
 
         // --- INIT ---
         window.onload = async () => {
+            console.log("TrovaFamiglia v2.0 Loaded Successfully!");
             // Check Auto Login
             const savedId = localStorage.getItem('tf_user_id');
             const savedPass = localStorage.getItem('tf_user_pass');
