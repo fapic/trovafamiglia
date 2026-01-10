@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TrovaFamiglia</title>
+
+    <!-- Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <!-- Leaflet Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Leaflet MarkerCluster -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
+    <!-- Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- LOGIN SCREEN -->
+    <div id="login-screen">
+        <div class="title-icon">
+            <i class="ph-fill ph-radar"></i>
+        </div>
+        <h1>TrovaFamiglia</h1>
+        <p style="color:#94a3b8; margin-bottom: 2rem;">Inserisci nome e password</p>
+
+        <input type="text" id="username" placeholder="Nome (Es. Mario)" autocomplete="off">
+        <input type="password" id="password" placeholder="Password" style="margin-top: 10px;">
+        <button onclick="handleLogin()" style="margin-top: 20px;">ENTRA / REGISTRATI</button>
+        <p id="status-msg" style="margin-top:1rem; color: #ef4444; height: 1.2em;"></p>
+    </div>
+
+    <!-- MAP SCREEN -->
+    <div id="map-container">
+        <div id="map"></div>
+
+        <!-- GPS Status Overlay -->
+        <div id="gps-controls" style="position:absolute; bottom:10px; left:10px; z-index:1000; display:flex; flex-direction:column; gap:5px;">
+            <div id="gps-toggle-btn" onclick="toggleLocalTracking()" style="background:rgba(15, 23, 42, 0.9); padding:8px 12px; border-radius:12px; font-size:0.8rem; font-weight:bold; cursor:pointer; border:1px solid #3b82f6; display:flex; align-items:center; gap:8px;">
+                <div id="gps-dot" style="width:10px; height:10px; background:#22c55e; border-radius:50%;"></div>
+                <span id="gps-toggle-text">Trasmissione: ON</span>
+            </div>
+            <div id="gps-status" style="background:rgba(0,0,0,0.6); padding:5px 10px; border-radius:15px; font-size:0.75rem; color:#94a3b8;">
+                📡 In attesa GPS...
+            </div>
+        </div>
+
+        <div id="logout-btn" onclick="doLogout()">Esci</div>
+
+        <!-- Users Menu -->
+        <div id="users-menu-wrapper" style="position:fixed; top:75px; left:15px; z-index:2000;">
+            <div id="users-menu-btn" onclick="toggleUserMenu()">
+                👥 Elenco Utenti
+            </div>
+            <div id="users-list-dropdown" class="hidden">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
+        <div id="admin-btn" class="hidden" onclick="openAdmin()">
+            <i class="ph ph-gear" style="font-size: 1.5rem; color: white;"></i>
+        </div>
+    </div>
+
+    <!-- ADMIN PANEL -->
+    <div id="admin-panel">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+            <h2>Gestione Utenti</h2>
+            <button onclick="closeAdmin()"
+                style="width:auto; background:transparent; border:1px solid white;">Chiudi</button>
+        </div>
+
+        <div id="admin-settings"
+            style="margin-bottom: 2rem; border-bottom: 1px solid #334155; padding-bottom:1rem; display:none;">
+            <h3 style="color:white; margin-bottom:0.5rem;">Impostazioni Amministratore</h3>
+            <div style="display:flex; align-items:center;">
+                <input type="checkbox" id="tracking-toggle" checked onchange="toggleMyTracking()"
+                    style="width:auto; margin:0 10px 0 0;">
+                <label for="tracking-toggle" style="color:white;">Rileva la mia posizione</label>
+            </div>
+        </div>
+
+        <div id="user-list">
+            <!-- Users Injected Here -->
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
