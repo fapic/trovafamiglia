@@ -753,14 +753,23 @@
                 showToast("Trasmissione attiva");
             } else {
                 showToast("Trasmissione disattivata");
-                // Immediately mark as red/offline locally and remotely
-                // Instead of setting date to 1970 which causes bugs, set a flag 'is_online: false' or just handle display
-                // Since we don't have is_online in DB schema, we will keep last_seen but we might need a better way.
-                // Actually, the user complained about "20000 days". 
-                // We will set last_seen to a long time ago for Logic, but FIX THE DISPLAY to say "Offline" instead of "20000 days".
                 markMeOffline();
+                // Force immediate local update to RED
+                if (myUser && allUsersCache[myUser.id]) {
+                    allUsersCache[myUser.id].last_seen = new Date(2000, 0, 1).toISOString(); // Force old date locally
+                    updateMarker(allUsersCache[myUser.id]);
+                }
             }
         }
+
+        // --- PASSIVE OFFLINE DETECTION LOOP ---
+        setInterval(() => {
+            // Re-run updateMarker for everyone to refresh red/green status based on time
+            if (map) { // Only if map is loaded
+                const users = Object.values(allUsersCache);
+                users.forEach(u => updateMarker(u));
+            }
+        }, 10000); // Check every 10 seconds
 
         function updateGpsToggleButton() {
             const btn = document.getElementById('gps-toggle-btn');
