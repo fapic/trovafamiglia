@@ -19,6 +19,7 @@ let trackingEnabled = true; // Default true (unless Admin disables)
 let followingUserId = null;
 let followLine = null; // The polyline object
 let myCurrentPos = null; // {lat, lng}
+let deviceOrientation = 0; // Device heading from compass
 let wakeLock = null;
 let retryGpsTimeout = null;
 let lastHistorySavedTime = 0;
@@ -1077,6 +1078,42 @@ window.showUserHistory = async (userId, userName) => {
     map.fitBounds(historyLayer.getBounds(), { padding: [50, 50] });
     showToast(`Percorso caricato: ${history.length} punti`);
 }
+
+// --- ZOOM OUT FUNCTION ---
+window.fitAllUsers = () => {
+    const latLngs = [];
+    Object.values(allUsersCache).forEach(u => {
+        if (u.lat && u.lng) latLngs.push([u.lat, u.lng]);
+    });
+    if (latLngs.length > 0) {
+        const bounds = L.latLngBounds(latLngs);
+        map.fitBounds(bounds, { padding: [50, 50] });
+    } else {
+        showToast("Nessun utente in mappa");
+    }
+}
+
+// --- MAP ROTATION FUNCTIONS ---
+function rotateMap(heading) {
+    if (!map) return;
+
+    // Rotate the map pane
+    const mapPane = map.getPane('mapPane');
+
+    // We want the HEADING to be UP (0deg).
+    // If device heading is 90deg (East), we must rotate map -90deg.
+    const angle = -heading;
+
+    mapPane.style.transformOrigin = 'center';
+    mapPane.style.transform = `rotate(${angle}deg)`;
+}
+
+function resetMapRotation() {
+    if (!map) return;
+    const mapPane = map.getPane('mapPane');
+    mapPane.style.transform = 'rotate(0deg)';
+}
+
 
 // Add CSS for rotation if needed
 const style = document.createElement('style');
