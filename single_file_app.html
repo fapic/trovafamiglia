@@ -1,17 +1,13 @@
 <!DOCTYPE html>
 <html lang="it">
 
-
-<!-- FORCE UPDATE V2.1 -->
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>TrovaFamiglia v2.0</title>
+    <title>TrovaFamiglia</title>
 
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
 
     <!-- Leaflet Maps -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -575,7 +571,6 @@
 
         // --- INIT ---
         window.onload = async () => {
-            console.log("TrovaFamiglia v2.0 Loaded Successfully!");
             // Check Auto Login
             const savedId = localStorage.getItem('tf_user_id');
             const savedPass = localStorage.getItem('tf_user_pass');
@@ -753,23 +748,14 @@
                 showToast("Trasmissione attiva");
             } else {
                 showToast("Trasmissione disattivata");
+                // Immediately mark as red/offline locally and remotely
+                // Instead of setting date to 1970 which causes bugs, set a flag 'is_online: false' or just handle display
+                // Since we don't have is_online in DB schema, we will keep last_seen but we might need a better way.
+                // Actually, the user complained about "20000 days". 
+                // We will set last_seen to a long time ago for Logic, but FIX THE DISPLAY to say "Offline" instead of "20000 days".
                 markMeOffline();
-                // Force immediate local update to RED
-                if (myUser && allUsersCache[myUser.id]) {
-                    allUsersCache[myUser.id].last_seen = new Date(2000, 0, 1).toISOString(); // Force old date locally
-                    updateMarker(allUsersCache[myUser.id]);
-                }
             }
         }
-
-        // --- PASSIVE OFFLINE DETECTION LOOP ---
-        setInterval(() => {
-            // Re-run updateMarker for everyone to refresh red/green status based on time
-            if (map) { // Only if map is loaded
-                const users = Object.values(allUsersCache);
-                users.forEach(u => updateMarker(u));
-            }
-        }, 10000); // Check every 10 seconds
 
         function updateGpsToggleButton() {
             const btn = document.getElementById('gps-toggle-btn');

@@ -19,7 +19,6 @@ let trackingEnabled = true; // Default true (unless Admin disables)
 let followingUserId = null;
 let followLine = null; // The polyline object
 let myCurrentPos = null; // {lat, lng}
-let deviceOrientation = 0; // Device heading from compass
 let wakeLock = null;
 let retryGpsTimeout = null;
 let lastHistorySavedTime = 0;
@@ -51,37 +50,10 @@ window.onload = async () => {
             .eq('id', savedId)
             .single();
 
-        if (user && user.password === savedPass) {
-            if (user.approved === false) { // Explicit false check
-                setStatus('Utente in attesa di approvazione.');
-                document.getElementById('login-screen').style.display = 'flex';
-                return;
-            }
+        if (user && user.password === savedPass && user.approved !== false) {
             enterApp(user);
             return;
         }
-    }
-
-    // Init Orientation Listener
-    if (window.DeviceOrientationEvent) {
-        window.addEventListener('deviceorientation', (event) => {
-            if (event.webkitCompassHeading) {
-                deviceOrientation = event.webkitCompassHeading; // iOS
-            } else if (event.alpha) {
-                deviceOrientation = 360 - event.alpha; // Android (rough)
-            }
-
-            // Rotate Map if Following
-            if (followingUserId && trackingEnabled) {
-                rotateMap(deviceOrientation);
-            }
-
-            // Update My Marker Rotation
-            if (myUser && markers[myUser.id]) {
-                const arrow = markers[myUser.id].getElement()?.querySelector('.marker-arrow');
-                if (arrow) arrow.style.transform = `translateX(-50%) rotate(${deviceOrientation}deg)`;
-            }
-        });
     }
 };
 
@@ -95,6 +67,17 @@ async function handleLogin() {
 
     setStatus('Controllo utente...');
 
+    // 1. Check if device is banned (any user with this deviceId that is approved: false)
+    const { data: bannedCheck } = await _supabase
+        .from('family_tracker')
+        .select('name, approved')
+        .eq('device_id', deviceId)
+        .eq('approved', false);
+
+    if (bannedCheck && bannedCheck.length > 0) {
+        return setStatus('Questo dispositivo è stato bannato.');
+    }
+
     // 2. Check if user exists
     let { data: users, error } = await _supabase
         .from('family_tracker')
@@ -107,29 +90,20 @@ async function handleLogin() {
     if (users.length === 0) {
         // Register NEW user
         const isAdmin = (username.toLowerCase() === 'fabio');
-        // Default approved is FALSE unless Fabio
-        const isApproved = isAdmin;
-
         const { data, error: insertError } = await _supabase
             .from('family_tracker')
             .insert([{
                 name: username,
                 password: password,
-                approved: isApproved, // Logica approvazione
+                approved: true,
                 is_admin: isAdmin,
-                device_id: deviceId,
-                allowed_groups: isAdmin ? ['famiglia', 'lavoro', 'amici'] : ['nuovi'] // Default group
+                device_id: deviceId
             }])
             .select()
             .single();
 
         if (insertError) return setStatus('Errore creazione: ' + insertError.message);
-
-        if (data.approved) {
-            enterApp(data);
-        } else {
-            setStatus(`Registrazione avvenuta. L'amministratore deve approvare "${username}".`);
-        }
+        enterApp(data);
 
     } else {
         // Login Existing
@@ -150,7 +124,7 @@ async function handleLogin() {
         }
 
         if (user.approved === false) {
-            return setStatus('Accesso in attesa di approvazione admin.');
+            return setStatus('Accesso negato dall\'amministratore.');
         }
 
         enterApp(user);
@@ -190,8 +164,8 @@ function enterApp(user) {
         document.getElementById('admin-btn').classList.remove('hidden');
         document.getElementById('admin-settings').style.display = 'block';
 
-        // Ensure Fabio is marked as admin and approved in DB
-        _supabase.from('family_tracker').update({ is_admin: true, approved: true }).eq('id', user.id);
+        // Ensure Fabio is marked as admin in DB
+        _supabase.from('family_tracker').update({ is_admin: true }).eq('id', user.id);
     } else if (user.is_admin) {
         document.getElementById('admin-btn').classList.remove('hidden');
         document.getElementById('admin-settings').style.display = 'block';
@@ -222,29 +196,9 @@ window.toggleLocalTracking = () => {
     if (trackingEnabled) {
         startTracking();
         showToast("Trasmissione attiva");
-
-        // Force immediate logic to show "Waiting..." or Green if cached
-        document.getElementById('gps-status').innerHTML = "⌛ Attendo GPS...";
-        if (myCurrentPos) {
-            // If we have a position, assume it's valid for a moment until updated
-            onLocationFound({ coords: { latitude: myCurrentPos.lat, longitude: myCurrentPos.lng } });
-        }
     } else {
         showToast("Trasmissione disattivata");
-        document.getElementById('gps-status').innerHTML = "🔴 GPS Spento";
-
-        // IMMEDIATE RED STATUS
-        if (myUser) {
-            // Update local cache to look "Offline" immediately
-            // Use a date far in the past to trigger "Offline" red color
-            const oldDate = new Date(Date.now() - 1000 * 60 * 60).toISOString();
-            if (allUsersCache[myUser.id]) {
-                allUsersCache[myUser.id].last_seen = oldDate;
-                updateMarker(allUsersCache[myUser.id]);
-            }
-            // Send offline to DB
-            markMeOffline();
-        }
+        document.getElementById('gps-status').innerHTML = "🔴 GPS in sola lettura";
     }
 }
 
@@ -262,55 +216,6 @@ function updateGpsToggleButton() {
         dot.style.background = '#ef4444';
         text.innerText = "Trasmissione: OFF";
     }
-}
-
-window.fitAllUsers = () => {
-    const latLngs = [];
-    Object.values(allUsersCache).forEach(u => {
-        if (u.lat && u.lng) latLngs.push([u.lat, u.lng]);
-    });
-    if (latLngs.length > 0) {
-        const bounds = L.latLngBounds(latLngs);
-        map.fitBounds(bounds, { padding: [50, 50] });
-    } else {
-        showToast("Nessun utente in mappa");
-    }
-}
-
-// --- MAP ROTATION LOGIC ---
-function rotateMap(heading) {
-    if (!map) return;
-
-    // Rotate the map container
-    // Note: Simple CSS rotation of the whole map div. 
-    // This rotates everything including labels. Labels might be upside down. This is the trade-off.
-    // To minimize UI impact, we only rotate the map pane.
-    const mapPane = map.getPane('mapPane');
-
-    // We want the HEADING to be UP (0deg).
-    // If device heading is 90deg (East), we must rotate map -90deg.
-    const angle = -heading;
-
-    mapPane.style.transformOrigin = 'center';
-    mapPane.style.transform = `rotate(${angle}deg)`;
-
-    // We must Counter-Rotate Markers so they stay upright?
-    // Actually, markers usually should follow the map rotation to stay attached to the ground?
-    // No, text labels should stay upright.
-    // Let's iterate markers and counter-rotate their icons?
-    // It's expensive. Let's see if user accepts this.
-    // The request said: "ruotasse in modo da farmi vedere nella direzione dove sto andando".
-    // This implies simple "Course Up".
-
-    // Issue: Panning breaks with CSS rotation on mapPane in Leaflet.
-    // Better: Rotate the view bearing if possible? Leaflet doesn't support this native.
-    // Let's stick to the CSS transform but be aware of interaction issues.
-    // NOTE: This is experimental.
-}
-
-function resetMapRotation() {
-    const mapPane = map.getPane('mapPane');
-    if (mapPane) mapPane.style.transform = 'none';
 }
 
 async function loadSafeZones() {
@@ -472,12 +377,7 @@ async function onLocationFound(pos) {
             const nowIso = new Date().toISOString();
 
             // 2. Update Map Locally (so you see yourself immediately)
-            // Ensure status logic sees this as NEW (Online)
-            const myUserUpdated = { ...myUser, lat, lng, last_seen: nowIso };
-            // Make sure cache has it so updateMarker logic works
-            allUsersCache[myUser.id] = myUserUpdated;
-            updateMarker(myUserUpdated);
-
+            updateMarker({ ...myUser, lat, lng, last_seen: nowIso });
             updateFollowLogic();
 
             // 3. Update Database (Priority)
@@ -504,10 +404,7 @@ async function onLocationFound(pos) {
                 lastHistorySavedTime = now;
             }
         } else if (!trackingEnabled) {
-            // If we receive a location but tracking is off, do NOT update DB.
-            // But we might want to update local map to show "Me" if the user wants?
-            // User said: "deve rivelare subito il fatto che l'utente ha il GPS attivato" -> handled by onLocationFound running.
-            // logic handled above.
+            statusEl.innerHTML = `🔴 TRASMISSIONE DISATTIVATA`;
         }
     } catch (e) {
         console.error("Critical GPS Error:", e);
@@ -547,15 +444,8 @@ function onLocationError(err) {
 
     document.getElementById('gps-status').innerHTML = `${msg} <br> <span style="font-size:10px">Riprovo tra 5s...</span>`;
 
-    // Mark as offline in DB immediately AND Locally
-    if (trackingEnabled) {
-        markMeOffline();
-        if (myUser && allUsersCache[myUser.id]) {
-            // Red status immediately
-            allUsersCache[myUser.id].last_seen = '1970-01-01T00:00:00Z';
-            updateMarker(allUsersCache[myUser.id]);
-        }
-    }
+    // Mark as offline in DB immediately
+    markMeOffline();
 
     // Auto-retry after 5 seconds
     if (!retryGpsTimeout) {
@@ -621,39 +511,22 @@ function subscribeToChanges() {
 
 // --- MARKER LOGIC ---
 function updateMarker(user) {
-    // Check GROUPS Visibility
-    // If I am Admin, I see everything (or I can filter? request said "solo io che sono amministratore potrò vedere gli utenti di tutti i gruppi")
-    // If I am User, I only see users who have at least ONE matching group with me.
-
-    // Default to 'famiglia' if no groups set
-    const myGroups = myUser.allowed_groups || ['famiglia'];
-    const userGroups = user.allowed_groups || ['famiglia'];
-
-    let isVisible = false;
-
-    if (myUser.is_admin) {
-        isVisible = true; // Admin sees all
-    } else if (user.id === myUser.id) {
-        isVisible = true; // See myself
-    } else {
-        // Check intersection
-        const intersection = myGroups.filter(g => userGroups.includes(g));
-        if (intersection.length > 0) isVisible = true;
-    }
-
-    // Also check valid lat/lng and approved
-    if (!isVisible || !user.lat || !user.lng || user.approved === false) {
-        if (markers[user.id]) {
-            markerCluster.removeLayer(markers[user.id]);
-            delete markers[user.id];
-        }
-        return;
-    }
-
     // Update Cache
     const isNew = !allUsersCache[user.id];
     allUsersCache[user.id] = user;
-    rebuildUserMenu(); // Always rebuild to update online/offline dots and list with filtered users
+    rebuildUserMenu(); // Always rebuild to update online/offline dots
+
+    if (!user.lat || !user.lng) {
+        if (user.id === myUser.id) {
+            document.getElementById('gps-status').innerHTML = "🔴 Nessuna posizione salvata. Attiva il GPS!";
+        }
+        return;
+    }
+    if (user.approved === false && markers[user.id]) {
+        markerCluster.removeLayer(markers[user.id]);
+        delete markers[user.id];
+        return;
+    }
 
     // Calc Direction if we have prev pos
     let rotation = 0;
@@ -672,7 +545,7 @@ function updateMarker(user) {
     // Color
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
 
-    // Online/Offline Status (Realtime Check)
+    // Online/Offline Status
     const lastSeen = new Date(user.last_seen);
     const now = new Date();
     const diffMs = now - lastSeen;
@@ -680,17 +553,14 @@ function updateMarker(user) {
     let statusHtml = '';
     let isOnline = false;
 
-    // Use 2 mins as threshold for "Instant" feel, or keep 5? 
-    // Request: "rivelare subito... senza refresh".
-    // 5 mins is safer for network lag, but UI updates instant locally.
-    if (diffMins < 5) { // Keep 5 mins tolerance for server
+    if (diffMins < 5) {
         statusHtml = '<span style="color:#22c55e">● Online</span>';
         isOnline = true;
     } else {
         const diffHours = Math.floor(diffMins / 60);
         const diffDays = Math.floor(diffHours / 24);
         if (diffDays > 0) statusHtml = `<span style="color:#ef4444">Offline da ${diffDays}gg</span>`;
-        else statusHtml = `<span style="color:#ef4444">Offline da ${diffHours}h ${diffMins % 60}m</span>`;
+        else statusHtml = `<span style="color:#ef4444">Offline da ${diffHours}h</span>`;
     }
 
     const statusColor = isOnline ? '#22c55e' : '#ef4444';
@@ -724,9 +594,6 @@ function updateMarker(user) {
     });
 
     let zoneHtml = currentZone ? `<div class="safe-zone-tag">📍 ${currentZone}</div>` : '';
-
-    // Group Badge (Debug)
-    // const groupHtml = `<div style="font-size:0.7em; color:#aaa;">Gruppi: ${(user.allowed_groups||[]).join(',')}</div>`;
 
     const popupContent = `
         <div style="text-align:center;">
@@ -815,6 +682,9 @@ function updateMarker(user) {
         markers[user.id].setIcon(customIcon);
         // Update popup if open
         if (markers[user.id].getPopup() && markers[user.id].getPopup().isOpen()) {
+            // Don't fully overwrite if user is interacting, but we need to update distance/status
+            // Leaflet doesn't easily update valid popup content without closing.
+            // We'll set content and hopefully it stays open.
             markers[user.id].setPopupContent(popupContent);
         } else {
             markers[user.id].bindPopup(popupContent);
@@ -841,7 +711,6 @@ window.toggleFollow = async (id) => {
             map.removeLayer(followLine);
             followLine = null;
         }
-        resetMapRotation(); // STOP rotation when stopping follow
     } else {
         followingUserId = id;
         updateFollowLogic();
@@ -930,197 +799,110 @@ window.zoomToUser = (id) => {
     }
 }
 
-// --- ADMIN ---
-window.openAdmin = async () => {
-    const adminPanel = document.getElementById('admin-panel');
-    adminPanel.style.display = 'block';
+// --- UTILS ---
+function calculateBearing(startLat, startLng, destLat, destLng) {
+    const startLatRad = startLat * (Math.PI / 180);
+    const startLngRad = startLng * (Math.PI / 180);
+    const destLatRad = destLat * (Math.PI / 180);
+    const destLngRad = destLng * (Math.PI / 180);
 
+    const y = Math.sin(destLngRad - startLngRad) * Math.cos(destLatRad);
+    const x = Math.cos(startLatRad) * Math.sin(destLatRad) -
+        Math.sin(startLatRad) * Math.cos(destLatRad) * Math.cos(destLngRad - startLngRad);
+
+    let brng = Math.atan2(y, x);
+    brng = brng * (180 / Math.PI);
+    return (brng + 360) % 360;
+}
+
+function getColor(name) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+    return '#' + '00000'.substring(0, 6 - c.length) + c;
+}
+
+// --- ADMIN ---
+async function openAdmin() {
+    document.getElementById('admin-panel').style.display = 'block';
+    refreshUserList();
+}
+
+function closeAdmin() {
+    document.getElementById('admin-panel').style.display = 'none';
+}
+
+async function refreshUserList() {
     const list = document.getElementById('user-list');
     list.innerHTML = 'Caricamento...';
-
-    const { data: users, error } = await _supabase.from('family_tracker').select('*').order('created_at', { ascending: false });
-
-    if (error) {
-        list.innerText = 'Errore: ' + error.message;
-        return;
-    }
-
+    const { data: users } = await _supabase.from('family_tracker').select('*').order('created_at');
     list.innerHTML = '';
-
     users.forEach(u => {
         const div = document.createElement('div');
         div.className = 'user-row';
-
-        const isApproved = u.approved;
-        const groups = u.allowed_groups ? u.allowed_groups.join(', ') : '';
-
         div.innerHTML = `
             <div>
-                <strong style="font-size:1.1rem; color: #fff;">${u.name}</strong> 
-                ${u.is_admin ? '<span style="color:#ef4444; font-size:0.8rem; border:1px solid #ef4444; padding:0 4px; border-radius:4px;">ADMIN</span>' : ''}
-                <div style="font-size:0.9rem; color:#94a3b8; margin-top:4px;">
-                    Gruppi: <input type="text" id="group-input-${u.id}" value="${groups}" 
-                            placeholder="Es: famiglia, lavoro" 
-                            style="background:#0f172a; border:1px solid #475569; padding:4px; max-width:150px; color:white; font-size:0.8rem; border-radius:4px;">
-                    <button onclick="saveUserGroups('${u.id}')" style="padding:2px 8px; font-size:0.7rem; width:auto; display:inline;">💾</button>
-                    ${!u.is_admin ? `
-                        <button onclick="deleteUser('${u.id}')" style="background:#ef4444; padding:2px 6px; font-size:0.7rem; width:auto; display:inline; margin-left:5px;">🗑️</button>
-                    ` : ''}
-                </div>
+                <strong style="color:${getColor(u.name)}">${u.name}</strong> 
+                <span class="status-badge ${u.approved ? 'approved' : 'pending'}" style="background:${u.approved ? 'var(--success)' : 'grey'}">
+                    ${u.approved ? 'Attivo' : 'Bloccato'}
+                </span>
+                ${u.is_admin ? '<span style="color:gold">👑 Admin</span>' : ''}
             </div>
-            <div>
-                 <button onclick="toggleUserApproval('${u.id}', ${!isApproved})" 
-                    class="status-badge ${isApproved ? 'approved' : 'pending'}" 
-                    style="border:none; cursor:pointer; width:auto;">
-                    ${isApproved ? 'APPROVATO' : 'DA APPROVARE'}
-                 </button>
+            <div style="display:flex; gap:10px;">
+                ${!u.is_admin ? `
+                    ${u.approved
+                    ? `<button onclick="toggleUser('${u.id}', false)" style="background:var(--danger); padding:0.5rem;">Blocca</button>`
+                    : `<button onclick="toggleUser('${u.id}', true)" style="background:var(--success); padding:0.5rem;">Sblocca</button>`
+                }
+                ` : ''}
+                <button onclick="deleteUser('${u.id}')" style="background:#333; padding:0.5rem;">🗑</button>
             </div>
         `;
         list.appendChild(div);
     });
 }
 
-window.closeAdmin = () => {
-    document.getElementById('admin-panel').style.display = 'none';
-}
-
-window.toggleUserApproval = async (id, newStatus) => {
-    if (!confirm(newStatus ? "Approvare questo utente?" : "Revocare approvazione?")) return;
-
-    const { error } = await _supabase
-        .from('family_tracker')
-        .update({ approved: newStatus })
-        .eq('id', id);
-
-    if (error) alert("Errore: " + error.message);
-    else {
-        showToast("Stato aggiornato!");
-        openAdmin(); // Refresh list
-    }
-}
-
-window.saveUserGroups = async (id) => {
-    const val = document.getElementById(`group-input-${id}`).value;
-    // Split by comma and trim
-    const groups = val.split(',').map(s => s.trim()).filter(s => s.length > 0);
-
-    const { error } = await _supabase
-        .from('family_tracker')
-        .update({ allowed_groups: groups })
-        .eq('id', id);
-
-    if (error) alert("Errore: " + error.message);
-    else showToast("Gruppi salvati!");
+window.toggleUser = async (id, status) => {
+    await _supabase.from('family_tracker').update({ approved: status }).eq('id', id);
+    refreshUserList();
 }
 
 window.deleteUser = async (id) => {
-    if (!confirm("Sei sicuro di voler eliminare DEFINITIVAMENTE questo utente?")) return;
-    const { error } = await _supabase
-        .from('family_tracker')
-        .delete()
-        .eq('id', id);
-    if (error) alert(error.message);
-    else {
-        showToast("Utente eliminato");
-        openAdmin();
+    if (confirm("Sicuro di voler eliminare questo utente?")) {
+        await _supabase.from('family_tracker').delete().eq('id', id);
+        refreshUserList();
     }
 }
 
-// --- UTIL ---
-function getColor(name) {
-    const colors = ['#e11d48', '#d946ef', '#8b5cf6', '#6366f1', '#3b82f6', '#0ea5e9', '#10b981', '#84cc16', '#f59e0b', '#f97316'];
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    return colors[Math.abs(hash) % colors.length];
-}
-
-function calculateBearing(lat1, lng1, lat2, lng2) {
-    const toRad = x => x * Math.PI / 180;
-    const toDeg = x => x * 180 / Math.PI;
-    const dLng = toRad(lng2 - lng1);
-    const y = Math.sin(dLng) * Math.cos(toRad(lat2));
-    const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
-        Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLng);
-    return (toDeg(Math.atan2(y, x)) + 360) % 360;
-}
-
-// History feature
+// --- HISTORY LOGIC ---
 window.showUserHistory = async (userId, userName) => {
     if (historyLayer) {
         map.removeLayer(historyLayer);
         historyLayer = null;
     }
 
-    showToast(`Carico percorso di ${userName}...`);
-
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-    const { data: history, error } = await _supabase
+    // Get positions from last 24h
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await _supabase
         .from('location_history')
-        .select('lat, lng, created_at')
+        .select('lat, lng')
         .eq('user_id', userId)
-        .gte('created_at', oneDayAgo)
+        .gte('created_at', dayAgo)
         .order('created_at', { ascending: true });
 
-    if (error) return alert("Errore: " + error.message);
-    if (!history || history.length === 0) return alert("Nessuna cronologia nelle ultime 24 ore.");
+    if (error || !data || data.length < 2) {
+        return alert("Nessuno storico disponibile per le ultime 24h.");
+    }
 
-    const latlngs = history.map(h => [h.lat, h.lng]);
-
-    historyLayer = L.polyline(latlngs, {
-        color: '#6366f1',
+    const path = data.map(p => [p.lat, p.lng]);
+    historyLayer = L.polyline(path, {
+        color: getColor(userName),
         weight: 4,
         className: 'history-line'
     }).addTo(map);
 
     map.fitBounds(historyLayer.getBounds(), { padding: [50, 50] });
-    showToast(`Percorso caricato: ${history.length} punti`);
+    showToast(`Percorso di ${userName} caricato`);
 }
-
-// --- ZOOM OUT FUNCTION ---
-window.fitAllUsers = () => {
-    const latLngs = [];
-    Object.values(allUsersCache).forEach(u => {
-        if (u.lat && u.lng) latLngs.push([u.lat, u.lng]);
-    });
-    if (latLngs.length > 0) {
-        const bounds = L.latLngBounds(latLngs);
-        map.fitBounds(bounds, { padding: [50, 50] });
-    } else {
-        showToast("Nessun utente in mappa");
-    }
-}
-
-// --- MAP ROTATION FUNCTIONS ---
-function rotateMap(heading) {
-    if (!map) return;
-
-    // Rotate the map pane
-    const mapPane = map.getPane('mapPane');
-
-    // We want the HEADING to be UP (0deg).
-    // If device heading is 90deg (East), we must rotate map -90deg.
-    const angle = -heading;
-
-    mapPane.style.transformOrigin = 'center';
-    mapPane.style.transform = `rotate(${angle}deg)`;
-}
-
-function resetMapRotation() {
-    if (!map) return;
-    const mapPane = map.getPane('mapPane');
-    mapPane.style.transform = 'rotate(0deg)';
-}
-
-
-// Add CSS for rotation if needed
-const style = document.createElement('style');
-style.innerHTML = `
-    /* Smooth Map Rotation */
-    .leaflet-map-pane {
-        transition: transform 0.3s ease-out;
-    }
-`;
-document.head.appendChild(style);
