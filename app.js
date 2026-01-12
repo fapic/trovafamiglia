@@ -26,6 +26,10 @@ let lastDbUpdate = 0;
 let alertedUsers = new Set();
 let safeZonesCache = [];
 
+// Camera Control State
+let isManualControl = false;
+let idleTimer = null;
+
 function getDeviceId() {
     let id = localStorage.getItem('tf_device_id');
     if (!id) {
@@ -307,6 +311,27 @@ function initMap() {
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 22 }).addTo(map);
 
+    // --- GESTIONE INTERAZIONE MANUALE E RESET AUTOMATICO ---
+    // Se l'utente tocca la mappa, disabilita il tracking automatico temporaneamente
+    map.on('mousedown touchstart dragstart zoomstart', () => {
+        if (followingUserId) {
+            isManualControl = true;
+            if (idleTimer) clearTimeout(idleTimer);
+        }
+    });
+
+    // Quando l'utente rilascia, avvia il timer di 5 secondi per ripristinare il tracking
+    map.on('mouseup touchend dragend zoomend', () => {
+        if (followingUserId && isManualControl) {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+                isManualControl = false;
+                updateFollowLogic(); // Ripristina la vista
+                showToast("Vista automatica ripristinata");
+            }, 5000);
+        }
+    });
+
     markerCluster = L.markerClusterGroup({ 
         maxClusterRadius: 20,
         spiderfyOnMaxZoom: true,
@@ -345,12 +370,12 @@ function updateMarker(user) {
             markerCluster.removeLayer(markers[user.id]);
             delete markers[user.id];
         }
-        allUsersCache[user.id] = user;
+        allUsersCache[user.id] = user; // keep in cache but don't show
         return;
     }
 
     allUsersCache[user.id] = user;
-    // Rebuild menu if open to update status dynamically, or just let next toggle handle it
+    // Rebuild menu if open to update status dynamically
     if (document.getElementById('users-list-dropdown')?.classList.contains('show')) {
         rebuildUserMenu();
     }
@@ -443,6 +468,9 @@ window.toggleFollow = (id) => {
         stopFollowing();
     } else {
         followingUserId = id;
+        isManualControl = false; // Reset manual control when starting to follow
+        if (idleTimer) clearTimeout(idleTimer);
+        
         document.getElementById('follow-mode-indicator').classList.remove('hidden');
         updateFollowLogic();
         map.closePopup();
@@ -452,6 +480,9 @@ window.toggleFollow = (id) => {
 
 window.stopFollowing = () => {
     followingUserId = null;
+    isManualControl = false;
+    if (idleTimer) clearTimeout(idleTimer);
+    
     document.getElementById('follow-mode-indicator').classList.add('hidden');
     // Map always fixed north now, no transform reset needed.
     if (followLine) {
@@ -471,20 +502,25 @@ function updateFollowLogic() {
     // Linea più visibile
     followLine = L.polyline([myLatLng, targetLatLng], { color: '#ef4444', weight: 4, dashArray: '10, 10', opacity: 0.7 }).addTo(map);
     
-    // ZOOM DINAMICO: Adatta la mappa per contenere entrambi (me e target)
-    const bounds = L.latLngBounds([myLatLng, targetLatLng]);
-    map.fitBounds(bounds, { padding: [80, 80], maxZoom: 19, animate: true });
+    // ZOOM DINAMICO (ADAPTIVE ZOOM)
+    // Esegui solo se l'utente non sta muovendo la mappa manualmente
+    if (!isManualControl) {
+        const bounds = L.latLngBounds([myLatLng, targetLatLng]);
+        // Padding assicura che i marker non siano sui bordi esatti
+        map.fitBounds(bounds, { padding: [80, 80], maxZoom: 19, animate: true });
+    }
 }
 
 // --- ADMIN & GROUPS ---
 async function loadGroups() {
     const { data, error } = await _supabase.from('groups').select('name');
-    if (data) {
+    if (data && data.length > 0) {
         availableGroups = data.map(g => g.name);
     } else {
-        // Silently fail if table doesn't exist, use default
-        // console.warn("Groups table may not exist yet, using default.");
-        availableGroups = ['famiglia']; 
+        // Fallback: se errore o vuoto, array vuoto o default. 
+        // Manteniamo logica robusta: se c'è errore assumiamo default 'famiglia' per non rompere UI.
+        if(error) availableGroups = ['famiglia'];
+        else availableGroups = []; 
     }
 }
 
@@ -501,6 +537,36 @@ window.createNewGroup = async () => {
             openAdmin(); // Refresh list
         }
     }
+}
+
+window.deleteGroup = async (groupName) => {
+    if (!confirm(`Sei sicuro di voler eliminare il gruppo "${groupName}"? Verrà rimosso anche da tutti gli utenti.`)) return;
+
+    // 1. Delete from groups table
+    const { error } = await _supabase.from('groups').delete().eq('name', groupName);
+    
+    if (error) {
+        alert("Errore eliminazione gruppo: " + error.message);
+        return;
+    }
+
+    showToast(`Gruppo "${groupName}" eliminato. Aggiornamento utenti...`);
+
+    // 2. Cleanup Users (Remove orphan group string)
+    const { data: users } = await _supabase.from('family_tracker').select('id, allowed_groups');
+    
+    if (users) {
+        for (const u of users) {
+            if (u.allowed_groups && u.allowed_groups.includes(groupName)) {
+                const newGroups = u.allowed_groups.filter(g => g !== groupName);
+                await _supabase.from('family_tracker').update({ allowed_groups: newGroups }).eq('id', u.id);
+            }
+        }
+    }
+
+    await loadGroups();
+    openAdmin();
+    showToast("Gruppo eliminato definitivamente.");
 }
 
 window.toggleUserGroup = async (userId, groupName, isChecked) => {
@@ -538,22 +604,47 @@ window.toggleUserGroup = async (userId, groupName, isChecked) => {
 window.openAdmin = async () => {
     document.getElementById('admin-panel').style.display = 'block';
     const list = document.getElementById('user-list');
-    list.innerHTML = 'Caricamento...';
+    list.innerHTML = '<div style="color:white; text-align:center; padding:20px;">Caricamento dati...</div>';
     
     await loadGroups();
     const { data: users } = await _supabase.from('family_tracker').select('*').order('created_at');
     
     list.innerHTML = '';
 
+    // --- GROUPS MANAGEMENT SECTION ---
+    const groupsDiv = document.createElement('div');
+    groupsDiv.className = 'admin-section';
+    groupsDiv.style.cssText = 'background:#1e293b; padding:15px; border-radius:12px; margin-bottom:20px; border:1px solid #334155;';
+    
+    let groupsHtml = '<h3 style="color:white; margin-top:0; font-size:1rem; border-bottom:1px solid #334155; padding-bottom:10px; margin-bottom:10px;">Gestione Gruppi</h3>';
+    
+    if (availableGroups.length === 0) {
+        groupsHtml += '<div style="color:#94a3b8; font-style:italic; font-size:0.9rem;">Nessun gruppo disponibile. Creane uno.</div>';
+    } else {
+        groupsHtml += '<div style="display:flex; flex-wrap:wrap; gap:8px;">';
+        availableGroups.forEach(g => {
+            groupsHtml += `
+                <div style="background:#0f172a; color:#e2e8f0; padding:6px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:8px; border:1px solid #475569;">
+                    <span>${g}</span>
+                    <button onclick="deleteGroup('${g}')" style="background:#ef4444; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer; border:none; color:white; font-size:10px; padding:0; line-height:1;">✕</button>
+                </div>
+            `;
+        });
+        groupsHtml += '</div>';
+    }
+    groupsDiv.innerHTML = groupsHtml;
+    list.appendChild(groupsDiv);
+
+    // --- USERS LIST ---
     users.forEach(u => {
         allUsersCache[u.id] = u;
         
         const userGroups = u.allowed_groups || [];
 
-        let groupsHtml = '<div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; background:#1e293b; padding:10px; border-radius:8px;">';
+        let groupsCheckboxesHtml = '<div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; background:#1e293b; padding:10px; border-radius:8px;">';
         availableGroups.forEach(g => {
             const isChecked = userGroups.includes(g);
-            groupsHtml += `
+            groupsCheckboxesHtml += `
                 <label style="display:flex; align-items:center; gap:6px; color:white; font-size:0.9rem; cursor:pointer;">
                     <input type="checkbox" 
                         ${isChecked ? 'checked' : ''} 
@@ -564,7 +655,7 @@ window.openAdmin = async () => {
                 </label>
             `;
         });
-        groupsHtml += '</div>';
+        groupsCheckboxesHtml += '</div>';
 
         const div = document.createElement('div');
         div.className = 'user-row';
@@ -586,7 +677,7 @@ window.openAdmin = async () => {
                 </div>
             </div>
             <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:5px;">Gruppi visibili:</div>
-            ${groupsHtml}
+            ${groupsCheckboxesHtml}
         `;
         list.appendChild(div);
     });
