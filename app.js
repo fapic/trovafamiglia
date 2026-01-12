@@ -707,6 +707,23 @@ function rebuildUserMenu() {
             return aOnline ? -1 : 1;
         });
 
+    // Add "Fit All" button at the top
+    if (users.length > 0) {
+        const fitItem = document.createElement('div');
+        fitItem.className = 'menu-user-item';
+        fitItem.style.background = 'rgba(59, 130, 246, 0.15)';
+        fitItem.style.color = '#93c5fd';
+        fitItem.style.justifyContent = 'center';
+        fitItem.style.borderBottom = '1px solid #475569';
+        fitItem.innerHTML = '<i class="ph-bold ph-corners-out" style="margin-right:8px"></i> Mappa Tutto il Gruppo';
+        fitItem.onclick = (e) => {
+            e.stopPropagation();
+            fitAllUsers();
+            toggleUserMenu();
+        };
+        list.appendChild(fitItem);
+    }
+
     if (users.length === 0) {
         list.innerHTML = '<div style="padding:15px; color:#94a3b8; text-align:center; font-size:0.9rem;">Nessun utente nel gruppo</div>';
         return;
