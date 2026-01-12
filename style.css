@@ -306,29 +306,39 @@ button {
 }
 
 #users-list-dropdown {
-    margin-top: 5px;
+    margin-top: 10px;
     background: rgba(15, 23, 42, 0.95);
-    border-radius: 8px;
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
     border: 1px solid #334155;
-    max-height: 300px;
+    max-height: 50vh;
     overflow-y: auto;
-    width: 220px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    width: 260px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
     display: none;
+    flex-direction: column;
 }
 
 #users-list-dropdown.show {
-    display: block;
+    display: flex;
 }
 
 .menu-user-item {
-    padding: 10px;
+    padding: 12px 16px;
     border-bottom: 1px solid #334155;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    color: white;
+    transition: background 0.2s;
+}
+
+.menu-user-item:hover {
+    background: rgba(59, 130, 246, 0.2);
+}
+
+.menu-user-item:last-child {
+    border-bottom: none;
 }
 
 .user-row {

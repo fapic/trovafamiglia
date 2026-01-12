@@ -342,8 +342,6 @@ function canISeeUser(targetUser) {
     if (!myUser) return false;
     if (myUser.id === targetUser.id) return true;
     if (myUser.is_admin) return true;
-    // Se l'utente target è admin, deve comunque condividere un gruppo per essere visto (richiesta utente)
-    // if (targetUser.is_admin) return true; // RIMOSSO
     const myGroups = myUser.allowed_groups || [];
     const targetGroups = targetUser.allowed_groups || [];
     return myGroups.some(g => targetGroups.includes(g));
@@ -351,7 +349,7 @@ function canISeeUser(targetUser) {
 
 // --- MARKERS ---
 function updateMarker(user) {
-    // Sincronizza myUser se sono io (importante per aggiornamenti realtime dei gruppi)
+    // Sincronizza myUser se sono io
     if (myUser && user.id === myUser.id) {
         myUser = { ...myUser, ...user };
     }
@@ -361,7 +359,6 @@ function updateMarker(user) {
             markerCluster.removeLayer(markers[user.id]);
             delete markers[user.id];
         }
-        // Aggiorniamo comunque la cache per il menu e l'admin panel
         allUsersCache[user.id] = user;
         return;
     }
@@ -378,8 +375,7 @@ function updateMarker(user) {
     }
 
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
-    const lastSeen = new Date(user.last_seen);
-    const isOnline = (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
+    const isOnline = isUserOnline(user);
     const statusColor = isOnline ? '#22c55e' : '#64748b';
     const isMe = (user.id === myUser.id);
     
@@ -413,6 +409,7 @@ function updateMarker(user) {
         iconAnchor: [0, 0]
     });
 
+    const lastSeen = new Date(user.last_seen);
     const popupContent = `
         <div style="text-align:center; min-width:150px;">
             <strong style="color:${color}; font-size:1.1em">${user.name}</strong>
@@ -438,12 +435,18 @@ function updateMarker(user) {
         const marker = L.marker([user.lat, user.lng], { icon: customIcon });
         marker.bindPopup(popupContent);
         markerCluster.addLayer(marker);
-        markers[user.id] = marker;
+        markers[user.id] = marker; // Correzione: Assegna il marker alla mappa markers
     }
 
     if (followingUserId === user.id) {
         updateFollowLogic();
     }
+}
+
+function isUserOnline(user) {
+    if (!user.last_seen) return false;
+    const lastSeen = new Date(user.last_seen);
+    return (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
 }
 
 window.toggleFollow = (id) => {
@@ -454,7 +457,7 @@ window.toggleFollow = (id) => {
         document.getElementById('follow-mode-indicator').classList.remove('hidden');
         updateFollowLogic();
         map.closePopup();
-        showToast("Modalità Segui Attiva: Ruota il telefono!");
+        showToast("Modalità Segui Attiva: Mappa automatica");
     }
 }
 
@@ -476,9 +479,14 @@ function updateFollowLogic() {
     if (!target) return;
     const targetLatLng = target.getLatLng();
     const myLatLng = [myCurrentPos.lat, myCurrentPos.lng];
+    
     if (followLine) map.removeLayer(followLine);
-    followLine = L.polyline([myLatLng, targetLatLng], { color: '#ef4444', dashArray: '5, 10' }).addTo(map);
-    map.setView(myLatLng, 18, { animate: true });
+    // Linea più visibile
+    followLine = L.polyline([myLatLng, targetLatLng], { color: '#ef4444', weight: 4, dashArray: '10, 10', opacity: 0.7 }).addTo(map);
+    
+    // ZOOM DINAMICO: Adatta la mappa per contenere entrambi (me e target)
+    const bounds = L.latLngBounds([myLatLng, targetLatLng]);
+    map.fitBounds(bounds, { padding: [80, 80], maxZoom: 19, animate: true });
 }
 
 // --- ADMIN & GROUPS ---
@@ -511,26 +519,20 @@ window.toggleUserGroup = async (userId, groupName, isChecked) => {
     const user = allUsersCache[userId];
     if (!user) return;
     
-    // Create a copy of current groups
     let currentGroups = [...(user.allowed_groups || [])];
     
     if (isChecked) {
-        // Add if not present
         if (!currentGroups.includes(groupName)) {
             currentGroups.push(groupName);
         }
     } else {
-        // Remove if present
         currentGroups = currentGroups.filter(g => g !== groupName);
     }
     
-    // Optimistic cache update so UI doesn't flicker
     user.allowed_groups = currentGroups;
 
-    // Aggiornamento immediato per l'utente corrente se sono io, per vedere subito l'effetto
     if (myUser && userId === myUser.id) {
         myUser.allowed_groups = currentGroups;
-        // Ricalcola la visibilità di tutti poiché i miei permessi sono cambiati
         Object.values(allUsersCache).forEach(u => updateMarker(u));
     }
     
@@ -541,7 +543,6 @@ window.toggleUserGroup = async (userId, groupName, isChecked) => {
         
     if (error) {
         alert("Errore aggiornamento gruppi: " + error.message);
-        // Revert cache on error would be ideal, but reload handles it
         openAdmin();
     }
 }
@@ -551,19 +552,16 @@ window.openAdmin = async () => {
     const list = document.getElementById('user-list');
     list.innerHTML = 'Caricamento...';
     
-    // Parallel fetch
     await loadGroups();
     const { data: users } = await _supabase.from('family_tracker').select('*').order('created_at');
     
     list.innerHTML = '';
 
     users.forEach(u => {
-        // Update cache while we are at it
         allUsersCache[u.id] = u;
         
         const userGroups = u.allowed_groups || [];
 
-        // Checkbox List HTML
         let groupsHtml = '<div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; background:#1e293b; padding:10px; border-radius:8px;">';
         availableGroups.forEach(g => {
             const isChecked = userGroups.includes(g);
@@ -697,27 +695,58 @@ function rebuildUserMenu() {
     const list = document.getElementById('users-list-dropdown');
     if (!list) return;
     list.innerHTML = '';
-    const users = Object.values(allUsersCache).sort((a, b) => a.name.localeCompare(b.name));
+    
+    // Filtra solo gli utenti visibili (in base ai gruppi) e ordinali
+    const users = Object.values(allUsersCache)
+        .filter(u => canISeeUser(u))
+        .sort((a, b) => {
+            // Prima quelli online, poi alfabetico
+            const aOnline = isUserOnline(a);
+            const bOnline = isUserOnline(b);
+            if (aOnline === bOnline) return a.name.localeCompare(b.name);
+            return aOnline ? -1 : 1;
+        });
+
     if (users.length === 0) {
-        list.innerHTML = '<div style="padding:10px; color:#94a3b8; font-size:0.8rem;">Nessun utente</div>';
+        list.innerHTML = '<div style="padding:15px; color:#94a3b8; text-align:center; font-size:0.9rem;">Nessun utente nel gruppo</div>';
         return;
     }
+
     users.forEach(u => {
         const div = document.createElement('div');
         div.className = 'menu-user-item';
         div.onclick = () => {
             if (markers[u.id]) {
-                map.flyTo(markers[u.id].getLatLng(), 18);
+                map.flyTo(markers[u.id].getLatLng(), 18, { duration: 1.5 });
                 markers[u.id].openPopup();
+                toggleUserMenu();
+            } else {
+                showToast("Posizione non disponibile");
             }
-            list.classList.remove('show');
         };
-        const lastSeen = new Date(u.last_seen);
-        const isOnline = (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
-        const color = isOnline ? '#22c55e' : '#ef4444';
+        
+        const isOnline = isUserOnline(u);
+        const lastSeenDate = new Date(u.last_seen);
+        const timeAgo = Math.floor((new Date() - lastSeenDate) / 60000);
+        let statusText = isOnline ? 'Online' : (timeAgo > 60 ? `Offline da ${Math.floor(timeAgo/60)}h` : `Offline da ${timeAgo}m`);
+        
+        if (lastSeenDate.getFullYear() < 2000) statusText = "Mai visto";
+
         div.innerHTML = `
-            <span>${u.name}</span>
-            <div style="width:8px; height:8px; background:${color}; border-radius:50%;"></div>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <div style="
+                    width:12px; 
+                    height:12px; 
+                    background:${isOnline ? '#22c55e' : '#ef4444'}; 
+                    border-radius:50%; 
+                    box-shadow: 0 0 8px ${isOnline ? 'rgba(34, 197, 94, 0.6)' : 'transparent'};
+                "></div>
+                <div style="display:flex; flex-direction:column;">
+                    <span style="font-weight:bold; color:#f1f5f9; font-size:0.95rem;">${u.name}</span>
+                    <span style="font-size:0.75rem; color:#94a3b8;">${statusText}</span>
+                </div>
+            </div>
+            <i class="ph-bold ph-caret-right" style="color:#475569;"></i>
         `;
         list.appendChild(div);
     });
