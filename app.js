@@ -364,7 +364,10 @@ function updateMarker(user) {
     }
 
     allUsersCache[user.id] = user;
-    rebuildUserMenu();
+    // Rebuild menu if open to update status dynamically, or just let next toggle handle it
+    if (document.getElementById('users-list-dropdown')?.classList.contains('show')) {
+        rebuildUserMenu();
+    }
 
     if (!user.lat || !user.lng) return;
 
@@ -435,7 +438,7 @@ function updateMarker(user) {
         const marker = L.marker([user.lat, user.lng], { icon: customIcon });
         marker.bindPopup(popupContent);
         markerCluster.addLayer(marker);
-        markers[user.id] = marker; // Correzione: Assegna il marker alla mappa markers
+        markers[user.id] = marker; 
     }
 
     if (followingUserId === user.id) {
@@ -688,7 +691,17 @@ async function requestWakeLock() {
 
 window.toggleUserMenu = () => {
     const el = document.getElementById('users-list-dropdown');
-    if (el) el.classList.toggle('show');
+    if (!el) return;
+    
+    // Handle hidden class properly
+    if (el.classList.contains('hidden')) {
+        el.classList.remove('hidden');
+        el.classList.add('show');
+        rebuildUserMenu(); // Refresh content when opening
+    } else {
+        el.classList.add('hidden');
+        el.classList.remove('show');
+    }
 }
 
 function rebuildUserMenu() {
@@ -707,25 +720,22 @@ function rebuildUserMenu() {
             return aOnline ? -1 : 1;
         });
 
-    // Add "Fit All" button at the top
+    // Add "Fit All" button at the top (Sticky)
     if (users.length > 0) {
         const fitItem = document.createElement('div');
         fitItem.className = 'menu-user-item';
-        fitItem.style.background = 'rgba(59, 130, 246, 0.15)';
-        fitItem.style.color = '#93c5fd';
-        fitItem.style.justifyContent = 'center';
-        fitItem.style.borderBottom = '1px solid #475569';
-        fitItem.innerHTML = '<i class="ph-bold ph-corners-out" style="margin-right:8px"></i> Mappa Tutto il Gruppo';
+        fitItem.style.cssText = 'background: rgba(59, 130, 246, 0.2); color: #93c5fd; justify-content: center; font-weight: bold; border-bottom: 1px solid #475569; position: sticky; top: 0; z-index: 10; backdrop-filter: blur(5px);';
+        fitItem.innerHTML = '<i class="ph-bold ph-corners-out" style="margin-right:8px"></i> Vedi Tutto il Gruppo';
         fitItem.onclick = (e) => {
             e.stopPropagation();
             fitAllUsers();
-            toggleUserMenu();
+            toggleUserMenu(); // Close menu after action
         };
         list.appendChild(fitItem);
     }
 
     if (users.length === 0) {
-        list.innerHTML = '<div style="padding:15px; color:#94a3b8; text-align:center; font-size:0.9rem;">Nessun utente nel gruppo</div>';
+        list.innerHTML += '<div style="padding:15px; color:#94a3b8; text-align:center; font-size:0.9rem;">Nessun utente nel gruppo</div>';
         return;
     }
 
@@ -745,25 +755,43 @@ function rebuildUserMenu() {
         const isOnline = isUserOnline(u);
         const lastSeenDate = new Date(u.last_seen);
         const timeAgo = Math.floor((new Date() - lastSeenDate) / 60000);
-        let statusText = isOnline ? 'Online' : (timeAgo > 60 ? `Offline da ${Math.floor(timeAgo/60)}h` : `Offline da ${timeAgo}m`);
         
-        if (lastSeenDate.getFullYear() < 2000) statusText = "Mai visto";
+        let statusText = 'Online';
+        let statusColor = '#22c55e'; // Green
+        
+        if (!isOnline) {
+            statusColor = '#ef4444'; // Red
+            if (lastSeenDate.getFullYear() < 2020) {
+                statusText = 'Mai visto';
+            } else if (timeAgo < 60) {
+                statusText = `Offline da ${timeAgo}m`;
+            } else if (timeAgo < 1440) {
+                statusText = `Offline da ${Math.floor(timeAgo/60)}h`;
+            } else {
+                statusText = `Offline da ${Math.floor(timeAgo/1440)}gg`;
+            }
+        }
+
+        const color = userColor = u.is_admin ? '#ef4444' : getColor(u.name);
 
         div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:12px;">
+            <div style="display:flex; align-items:center; gap:12px; width: 100%;">
                 <div style="
-                    width:12px; 
-                    height:12px; 
-                    background:${isOnline ? '#22c55e' : '#ef4444'}; 
-                    border-radius:50%; 
-                    box-shadow: 0 0 8px ${isOnline ? 'rgba(34, 197, 94, 0.6)' : 'transparent'};
-                "></div>
-                <div style="display:flex; flex-direction:column;">
-                    <span style="font-weight:bold; color:#f1f5f9; font-size:0.95rem;">${u.name}</span>
-                    <span style="font-size:0.75rem; color:#94a3b8;">${statusText}</span>
+                    width: 36px; height: 36px; 
+                    background: ${isOnline ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'}; 
+                    border-radius: 50%; 
+                    display: flex; align-items: center; justify-content: center;
+                    border: 2px solid ${statusColor};
+                    flex-shrink: 0;
+                ">
+                    <span style="font-size:1.2em;">${isOnline ? '🟢' : '😴'}</span>
                 </div>
+                <div style="display:flex; flex-direction:column; overflow:hidden;">
+                    <span style="font-weight:bold; color:#f1f5f9; font-size:0.95rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${u.name}</span>
+                    <span style="font-size:0.75rem; color:${isOnline ? '#86efac' : '#94a3b8'};">${statusText}</span>
+                </div>
+                <i class="ph-bold ph-caret-right" style="margin-left:auto; color:#475569;"></i>
             </div>
-            <i class="ph-bold ph-caret-right" style="color:#475569;"></i>
         `;
         list.appendChild(div);
     });
