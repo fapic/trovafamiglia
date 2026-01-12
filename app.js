@@ -22,6 +22,7 @@ let currentHeading = 0;
 let wakeLock = null;
 let gpsWatchDog = null;
 let lastGpsUpdate = 0;
+let lastDbUpdate = 0;
 let alertedUsers = new Set();
 let safeZonesCache = [];
 
@@ -276,34 +277,19 @@ function startTracking() {
 
 // --- COMPASS ---
 function initCompass() {
+    // Map rotation disabled as per user request. 
+    // Compass tracking kept in memory just in case, but no UI transform.
     if (window.DeviceOrientationEvent) {
         window.addEventListener('deviceorientation', (e) => {
             let heading = e.webkitCompassHeading || (360 - e.alpha);
             if (!heading) return;
             currentHeading = heading;
-            if (followingUserId) {
-                const mapDiv = document.getElementById('map');
-                mapDiv.style.transform = `rotate(${-heading}deg)`;
-                rotateAllMarkers(heading);
-            } else {
-                const mapDiv = document.getElementById('map');
-                if (mapDiv) mapDiv.style.transform = `rotate(0deg)`;
-                rotateAllMarkers(0);
-            }
         });
     }
 }
 
 function rotateAllMarkers(heading) {
-    Object.values(markers).forEach(marker => {
-        const icon = marker.getElement();
-        if (icon) {
-            const inner = icon.querySelector('.custom-map-icon') || icon.querySelector('.custom-car-marker');
-            if (inner) {
-                inner.style.transform = `rotate(${heading}deg)`;
-            }
-        }
-    });
+    // No rotation needed on markers if map is fixed North
 }
 
 // --- MAP ---
@@ -382,9 +368,9 @@ function updateMarker(user) {
     const statusColor = isOnline ? '#22c55e' : '#64748b';
     const isMe = (user.id === myUser.id);
     
-    // Using max-content to allow text to expand nicely
+    // Using max-content to allow text to expand nicely. Removed rotation style.
     const iconHtml = `
-        <div class="${user.speed > 20 ? 'custom-car-marker' : 'custom-map-icon'}" style="transform: rotate(${followingUserId ? currentHeading : 0}deg)">
+        <div class="${user.speed > 20 ? 'custom-car-marker' : 'custom-map-icon'}">
             <div style="
                 background-color: ${color}; 
                 color: white; 
@@ -467,9 +453,7 @@ window.toggleFollow = (id) => {
 window.stopFollowing = () => {
     followingUserId = null;
     document.getElementById('follow-mode-indicator').classList.add('hidden');
-    const mapDiv = document.getElementById('map');
-    if (mapDiv) mapDiv.style.transform = 'rotate(0deg)';
-    rotateAllMarkers(0);
+    // Map always fixed north now, no transform reset needed.
     if (followLine) {
         map.removeLayer(followLine);
         followLine = null;
@@ -498,8 +482,9 @@ async function loadGroups() {
     if (data) {
         availableGroups = data.map(g => g.name);
     } else {
-        console.error("Error loading groups", error);
-        availableGroups = ['famiglia']; // Fallback
+        // Silently fail if table doesn't exist, use default
+        // console.warn("Groups table may not exist yet, using default.");
+        availableGroups = ['famiglia']; 
     }
 }
 
@@ -541,7 +526,7 @@ window.toggleUserGroup = async (userId, groupName, isChecked) => {
     
     const { error } = await _supabase
         .from('family_tracker')
-        .update({ allowed_groups: currentGroups })
+        .update({ allowed_groups: currentGroups})
         .eq('id', userId);
         
     if (error) {
@@ -628,13 +613,25 @@ async function onLocationFound(pos) {
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
     const speed = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+    
+    if (!lat || !lng) return;
+
     myCurrentPos = { lat, lng };
 
-    if (trackingEnabled && myUser) {
+    if (myUser) {
+        // Immediate local update
         updateMarker({ ...myUser, lat, lng, speed, last_seen: new Date().toISOString() });
-        await _supabase.from('family_tracker').update({
-            lat, lng, speed, last_seen: new Date().toISOString()
-        }).eq('id', myUser.id);
+    }
+
+    if (trackingEnabled && myUser) {
+        // Throttle DB updates to max once every 3 seconds
+        const now = Date.now();
+        if (now - lastDbUpdate > 3000) {
+            lastDbUpdate = now;
+            await _supabase.from('family_tracker').update({
+                lat, lng, speed, last_seen: new Date().toISOString()
+            }).eq('id', myUser.id);
+        }
     }
 }
 
@@ -653,7 +650,10 @@ function subscribeToChanges() {
         .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
                 const { data } = await _supabase.from('family_tracker').select('*');
-                if (data) data.forEach(u => updateMarker(u));
+                if (data) {
+                    data.forEach(u => updateMarker(u));
+                    fitAllUsers(); // Fit bounds after initial load
+                }
             }
         });
 }
@@ -772,8 +772,6 @@ function rebuildUserMenu() {
             }
         }
 
-        const color = userColor = u.is_admin ? '#ef4444' : getColor(u.name);
-
         div.innerHTML = `
             <div style="display:flex; align-items:center; gap:12px; width: 100%;">
                 <div style="
@@ -798,4 +796,7 @@ function rebuildUserMenu() {
 }
 
 async function loadSafeZones() {
+    // Implementation for safe zones loading if table exists
+    // const { data } = await _supabase.from('safe_zones').select('*');
+    // if (data) safeZonesCache = data;
 }
