@@ -1,4 +1,3 @@
-
 // CREDENZIALI
 const PROJECT_URL = 'https://pmwchmtelawxqfaexhio.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBtd2NobXRlbGF3eHFmYWV4aGlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1NTU4NzQsImV4cCI6MjA4MzEzMTg3NH0.dJncelPPGF9lNnKP2ddBcqAEQ3p9mGOImqWaOFLaoB8';
@@ -8,23 +7,23 @@ const _supabase = supabase.createClient(PROJECT_URL, ANON_KEY);
 // State
 let myUser = null;
 let map = null;
-let markers = {}; // Store marker objects: { [id]: L.marker }
+let markers = {};
 let markerCluster = null;
 let watchId = null;
-let gpsRetryInterval = null;
-let allUsersCache = {}; // Cache for menu
+let allUsersCache = {};
+let availableGroups = [];
 
-// New Features State
-let trackingEnabled = true; // Default true (unless Admin disables)
+// Features State
+let trackingEnabled = true;
 let followingUserId = null;
-let followLine = null; // The polyline object
-let myCurrentPos = null; // {lat, lng}
+let followLine = null;
+let myCurrentPos = null;
+let currentHeading = 0;
 let wakeLock = null;
-let retryGpsTimeout = null;
-let lastHistorySavedTime = 0;
-let historyLayer = null; // Polyline for user history
+let gpsWatchDog = null;
+let lastGpsUpdate = 0;
+let alertedUsers = new Set();
 let safeZonesCache = [];
-let alertedUsers = new Set(); // To avoid spamming proximity alerts
 
 function getDeviceId() {
     let id = localStorage.getItem('tf_device_id');
@@ -37,24 +36,29 @@ function getDeviceId() {
 
 // --- INIT ---
 window.onload = async () => {
-    // Check Auto Login
+    monitorGeolocationPermission();
+
     const savedId = localStorage.getItem('tf_user_id');
     const savedPass = localStorage.getItem('tf_user_pass');
 
     if (savedId && savedPass) {
         setStatus('Accesso automatico...');
-        // Verify credentials briefly
         const { data: user, error } = await _supabase
             .from('family_tracker')
             .select('*')
             .eq('id', savedId)
             .single();
 
-        if (user && user.password === savedPass && user.approved !== false) {
+        if (user && user.password === savedPass) {
+            if (user.approved === false) {
+                setStatus("Utente in attesa di approvazione dall'Admin.");
+                return;
+            }
             enterApp(user);
             return;
         }
     }
+    initCompass();
 };
 
 // --- LOGIN LOGIC ---
@@ -67,7 +71,6 @@ async function handleLogin() {
 
     setStatus('Controllo utente...');
 
-    // 1. Check if device is banned (any user with this deviceId that is approved: false)
     const { data: bannedCheck } = await _supabase
         .from('family_tracker')
         .select('name, approved')
@@ -78,7 +81,6 @@ async function handleLogin() {
         return setStatus('Questo dispositivo è stato bannato.');
     }
 
-    // 2. Check if user exists
     let { data: users, error } = await _supabase
         .from('family_tracker')
         .select('*')
@@ -88,43 +90,46 @@ async function handleLogin() {
     if (error) return setStatus('Errore connessione: ' + error.message);
 
     if (users.length === 0) {
-        // Register NEW user
         const isAdmin = (username.toLowerCase() === 'fabio');
+        const autoApprove = isAdmin;
+        const defaultGroups = ['famiglia'];
+
         const { data, error: insertError } = await _supabase
             .from('family_tracker')
             .insert([{
                 name: username,
                 password: password,
-                approved: true,
+                approved: autoApprove,
                 is_admin: isAdmin,
-                device_id: deviceId
+                device_id: deviceId,
+                allowed_groups: defaultGroups
             }])
             .select()
             .single();
 
         if (insertError) return setStatus('Errore creazione: ' + insertError.message);
-        enterApp(data);
 
-    } else {
-        // Login Existing
-        const user = users[0];
-        let dbPass = user.password;
-
-        if (!dbPass) {
-            // First time login for existing user -> Set password
-            await _supabase.from('family_tracker').update({ password: password, device_id: deviceId }).eq('id', user.id);
-            dbPass = password;
+        if (data.approved) {
+            enterApp(data);
         } else {
-            // Update device_id on login
-            await _supabase.from('family_tracker').update({ device_id: deviceId }).eq('id', user.id);
+            setStatus("Registrazione avvenuta. Attendi approvazione dell'Admin.");
         }
 
-        if (dbPass !== password) {
+    } else {
+        const user = users[0];
+
+        if (!user.password) {
+            await _supabase.from('family_tracker').update({ password: password, device_id: deviceId }).eq('id', user.id);
+        } else if (user.password !== password) {
             return setStatus('Password errata!');
         }
 
         if (user.approved === false) {
-            return setStatus('Accesso negato dall\'amministratore.');
+            return setStatus("Utente non approvato o bloccato.");
+        }
+
+        if (user.device_id !== deviceId) {
+            await _supabase.from('family_tracker').update({ device_id: deviceId }).eq('id', user.id);
         }
 
         enterApp(user);
@@ -141,560 +146,299 @@ function doLogout() {
     location.reload();
 }
 
-// --- MAIN APP ---
+// --- MAIN APP ENTRY ---
 function enterApp(user) {
     myUser = user;
 
-    // Save for Auto-login
     localStorage.setItem('tf_user_id', user.id);
     localStorage.setItem('tf_user_pass', user.password);
 
     document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('map-container').style.display = 'block';
-
-    // Show logout
+    document.getElementById('map-wrapper').style.display = 'block';
     document.getElementById('logout-btn').style.display = 'flex';
 
-    // Force Admin for Fabio and ensure tracking is ON
-    if (user.name.toLowerCase() === 'fabio') {
-        myUser.is_admin = true;
-        trackingEnabled = true;
-        localStorage.setItem('tf_tracking_enabled', 'true');
-
-        document.getElementById('admin-btn').classList.remove('hidden');
-        document.getElementById('admin-settings').style.display = 'block';
-
-        // Ensure Fabio is marked as admin in DB
-        _supabase.from('family_tracker').update({ is_admin: true }).eq('id', user.id);
-    } else if (user.is_admin) {
+    if (user.is_admin) {
+        if (user.name.toLowerCase() === 'fabio') {
+            trackingEnabled = true;
+            localStorage.setItem('tf_tracking_enabled', 'true');
+        }
         document.getElementById('admin-btn').classList.remove('hidden');
         document.getElementById('admin-settings').style.display = 'block';
     }
+
+    const savedTracking = localStorage.getItem('tf_tracking_enabled');
+    if (savedTracking === 'false' && user.name.toLowerCase() !== 'fabio') {
+        trackingEnabled = false;
+    }
+    
+    updateGpsToggleButton();
+    const adminToggle = document.getElementById('tracking-toggle');
+    if (adminToggle) adminToggle.checked = trackingEnabled;
 
     initMap();
     startTracking();
     subscribeToChanges();
     requestWakeLock();
     loadSafeZones();
-
-    // Check saved tracking preference (for non-Fabio users)
-    if (user.name.toLowerCase() !== 'fabio') {
-        const savedTracking = localStorage.getItem('tf_tracking_enabled');
-        if (savedTracking === 'false') trackingEnabled = false;
-    }
-
-    updateGpsToggleButton();
-    const adminToggle = document.getElementById('tracking-toggle');
-    if (adminToggle) adminToggle.checked = trackingEnabled;
 }
 
-window.toggleLocalTracking = () => {
-    trackingEnabled = !trackingEnabled;
-    localStorage.setItem('tf_tracking_enabled', trackingEnabled);
-    updateGpsToggleButton();
+// --- GPS MONITORING ---
+async function monitorGeolocationPermission() {
+    if (navigator.permissions) {
+        try {
+            const result = await navigator.permissions.query({ name: 'geolocation' });
+            result.onchange = () => {
+                if (result.state === 'denied') {
+                    setGpsUiState(false);
+                } else if (result.state === 'granted' && trackingEnabled) {
+                    startTracking();
+                }
+            };
+        } catch (e) { console.warn("Perms API error", e); }
+    }
+}
 
-    if (trackingEnabled) {
-        startTracking();
-        showToast("Trasmissione attiva");
+function setGpsUiState(isActive) {
+    const btn = document.getElementById('gps-toggle-btn');
+    const dot = document.getElementById('gps-dot');
+    const text = document.getElementById('gps-text');
+    
+    if (isActive) {
+        btn.style.borderColor = '#3b82f6';
+        dot.style.background = '#22c55e';
+        text.textContent = "GPS ON";
     } else {
-        showToast("Trasmissione disattivata");
-        document.getElementById('gps-status').innerHTML = "🔴 GPS in sola lettura";
+        btn.style.borderColor = '#ef4444';
+        dot.style.background = '#ef4444';
+        text.textContent = "GPS OFF";
     }
 }
 
 function updateGpsToggleButton() {
     const btn = document.getElementById('gps-toggle-btn');
     const dot = document.getElementById('gps-dot');
-    const text = document.getElementById('gps-toggle-text');
-
     if (trackingEnabled) {
         btn.style.borderColor = '#3b82f6';
         dot.style.background = '#22c55e';
-        text.innerText = "Trasmissione: ON";
     } else {
-        btn.style.borderColor = '#475569';
+        btn.style.borderColor = '#ef4444';
         dot.style.background = '#ef4444';
-        text.innerText = "Trasmissione: OFF";
     }
 }
 
-async function loadSafeZones() {
-    const { data } = await _supabase.from('safe_zones').select('*');
-    if (data) safeZonesCache = data;
-}
-
-function showToast(message) {
-    let toast = document.querySelector('.toast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.className = 'toast';
-        document.body.appendChild(toast);
+window.toggleLocalTracking = () => {
+    trackingEnabled = !trackingEnabled;
+    localStorage.setItem('tf_tracking_enabled', trackingEnabled);
+    updateGpsToggleButton();
+    
+    if (trackingEnabled) {
+        startTracking();
+        showToast("Trasmissione attiva");
+    } else {
+        setGpsUiState(false);
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        showToast("Trasmissione disattivata");
+        markMeOffline();
     }
-    toast.textContent = message;
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 4000);
 }
 
-// --- WAKE LOCK (Keep Screen On) ---
-async function requestWakeLock() {
-    if ('wakeLock' in navigator) {
-        try {
-            wakeLock = await navigator.wakeLock.request('screen');
-            console.log("Screen Wake Lock attivo!");
-            wakeLock.addEventListener('release', () => {
-                console.log('Wake Lock rilasciato');
-            });
-        } catch (err) {
-            console.warn(`Errore Wake Lock: ${err.name}, ${err.message}`);
+function startTracking() {
+    if (!trackingEnabled) return;
+    if (!navigator.geolocation) return alert("GPS non supportato");
+
+    setGpsUiState(false);
+
+    if (watchId) navigator.geolocation.clearWatch(watchId);
+
+    const options = { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 };
+
+    watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+            setGpsUiState(true);
+            lastGpsUpdate = Date.now();
+            onLocationFound(pos);
+        },
+        (err) => {
+            console.warn("GPS Error", err);
+            setGpsUiState(false);
+        },
+        options
+    );
+
+    if (gpsWatchDog) clearInterval(gpsWatchDog);
+    gpsWatchDog = setInterval(() => {
+        if (trackingEnabled && (Date.now() - lastGpsUpdate > 20000)) {
+            setGpsUiState(false);
         }
+    }, 5000);
+}
+
+// --- COMPASS ---
+function initCompass() {
+    if (window.DeviceOrientationEvent) {
+        window.addEventListener('deviceorientation', (e) => {
+            let heading = e.webkitCompassHeading || (360 - e.alpha);
+            if (!heading) return;
+            currentHeading = heading;
+            if (followingUserId) {
+                const mapDiv = document.getElementById('map');
+                mapDiv.style.transform = `rotate(${-heading}deg)`;
+                rotateAllMarkers(heading);
+            } else {
+                const mapDiv = document.getElementById('map');
+                if (mapDiv) mapDiv.style.transform = `rotate(0deg)`;
+                rotateAllMarkers(0);
+            }
+        });
     }
 }
 
-// Riavvia il wake lock se l'app torna in primo piano
-document.addEventListener('visibilitychange', async () => {
-    if (wakeLock !== null && document.visibilityState === 'visible') {
-        requestWakeLock();
-    }
-});
+function rotateAllMarkers(heading) {
+    Object.values(markers).forEach(marker => {
+        const icon = marker.getElement();
+        if (icon) {
+            const inner = icon.querySelector('.custom-map-icon') || icon.querySelector('.custom-car-marker');
+            if (inner) {
+                inner.style.transform = `rotate(${heading}deg)`;
+            }
+        }
+    });
+}
 
-// --- MAP & TRACKING ---
+// --- MAP ---
 function initMap() {
-    // Move Zoom controls to bottom-right to check overlap
+    if (map) {
+        map.invalidateSize();
+        return;
+    }
+
     map = L.map('map', {
         maxZoom: 22,
-        zoomControl: false // Disable default top-left
+        zoomControl: false,
+        attributionControl: false
     }).setView([41.9028, 12.4964], 6);
 
-    L.control.zoom({
-        position: 'bottomright'
-    }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 22 }).addTo(map);
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap',
-        maxZoom: 22
-    }).addTo(map);
-
-    markerCluster = L.markerClusterGroup({
-        maxClusterRadius: 10,
+    markerCluster = L.markerClusterGroup({ 
+        maxClusterRadius: 20,
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false,
         iconCreateFunction: function (cluster) {
-            const markers = cluster.getAllChildMarkers();
-            // List all names separated by a line break
-            const namesHtml = markers.map(m => m.options.title).join('<div style="margin:2px 0;"></div>');
-
-            return L.divIcon({
-                html: `<div style="
-                    background: rgba(15, 23, 42, 0.95);
-                    color: white;
-                    padding: 6px 10px;
-                    border-radius: 12px;
-                    border: 2px solid #3b82f6;
-                    font-size: 12px;
-                    font-weight: bold;
-                    text-align: center;
-                    box-shadow: 0 4px 6px rgba(0,0,0,0.5);
-                    white-space: nowrap;
-                    display: inline-block;
-                    min-width: 80px;
-                    transform: translate(-50%, -50%);
-                 ">
-                    ${namesHtml}
-                 </div>`,
+            const count = cluster.getChildCount();
+            return L.divIcon({ 
+                html: `<div style="background:#0f172a; color:white; border:2px solid #3b82f6; border-radius:50%; width:30px; height:30px; display:flex; align-items:center; justify-content:center; font-weight:bold;">${count}</div>`,
                 className: 'custom-cluster-icon',
-                iconSize: [0, 0],
-                iconAnchor: [0, 0]
+                iconSize: [30, 30]
             });
         }
     });
     map.addLayer(markerCluster);
+    setTimeout(() => map.invalidateSize(), 200);
 }
 
-function startTracking() {
-    if (!navigator.geolocation) return alert("GPS non supportato");
-
-    // Retry wrapper
-    function launchWatch(highAccuracy = true) {
-        if (watchId) navigator.geolocation.clearWatch(watchId);
-
-        const options = {
-            enableHighAccuracy: highAccuracy,
-            timeout: 15000,
-            maximumAge: 0
-        };
-
-        watchId = navigator.geolocation.watchPosition(
-            onLocationFound,
-            (err) => {
-                console.warn(highAccuracy ? "High Accuracy GPS failed" : "Low Accuracy GPS failed", err);
-                if (highAccuracy) {
-                    // Fallback to low accuracy (Triangulation/Wifi)
-                    console.log("Switching to Low Accuracy Mode...");
-                    document.getElementById('gps-status').innerHTML = `⚠️ GPS debole, provo reti WiFi...`;
-                    launchWatch(false);
-                } else {
-                    onLocationError(err);
-                }
-            },
-            options
-        );
-    }
-
-    launchWatch(true);
+function canISeeUser(targetUser) {
+    if (!myUser) return false;
+    if (myUser.id === targetUser.id) return true;
+    if (myUser.is_admin) return true;
+    // Se l'utente target è admin, deve comunque condividere un gruppo per essere visto (richiesta utente)
+    // if (targetUser.is_admin) return true; // RIMOSSO
+    const myGroups = myUser.allowed_groups || [];
+    const targetGroups = targetUser.allowed_groups || [];
+    return myGroups.some(g => targetGroups.includes(g));
 }
 
-async function getBattery() {
-    try {
-        if ('getBattery' in navigator) {
-            const battery = await navigator.getBattery();
-            return Math.round(battery.level * 100);
-        }
-    } catch (e) {
-        console.warn("Battery API error:", e);
-    }
-    return null;
-}
-
-async function onLocationFound(pos) {
-    try {
-        const lat = Number(pos.coords.latitude);
-        const lng = Number(pos.coords.longitude);
-        if (isNaN(lat) || isNaN(lng)) return;
-
-        myCurrentPos = { lat, lng };
-
-        // 1. UI Update with ID Debug
-        const statusEl = document.getElementById('gps-status');
-        const shortId = myUser ? myUser.id.substring(0, 4) : '...';
-        statusEl.innerHTML = `🟢 GPS OK [${shortId}] <br> <span style="font-size:0.7em">${lat.toFixed(4)}, ${lng.toFixed(4)}</span>`;
-
-        if (retryGpsTimeout) {
-            clearTimeout(retryGpsTimeout);
-            retryGpsTimeout = null;
-        }
-
-        if (trackingEnabled && myUser) {
-            const nowIso = new Date().toISOString();
-
-            // 2. Update Map Locally (so you see yourself immediately)
-            updateMarker({ ...myUser, lat, lng, last_seen: nowIso });
-            updateFollowLogic();
-
-            // 3. Update Database (Priority)
-            const { error: updateError } = await _supabase
-                .from('family_tracker')
-                .update({
-                    lat: lat,
-                    lng: lng,
-                    last_seen: nowIso
-                })
-                .eq('id', myUser.id);
-
-            if (updateError) {
-                console.error("DB Error:", updateError);
-                statusEl.innerHTML += ` ⚠️ Error!`;
-            } else {
-                statusEl.innerHTML += ` ☁️`; // Cloud = Persisted in DB
-            }
-
-            // 4. Update History (every 5 mins)
-            const now = Date.now();
-            if (now - lastHistorySavedTime > 5 * 60 * 1000) {
-                _supabase.from('location_history').insert([{ user_id: myUser.id, lat, lng }]);
-                lastHistorySavedTime = now;
-            }
-        } else if (!trackingEnabled) {
-            statusEl.innerHTML = `🔴 TRASMISSIONE DISATTIVATA`;
-        }
-    } catch (e) {
-        console.error("Critical GPS Error:", e);
-    }
-}
-
-// Function to force a test save from UI
-window.forceTestSave = async () => {
-    if (!myUser) return alert("Esegui prima il login");
-    const statusEl = document.getElementById('gps-status');
-    statusEl.innerHTML = "⌛ Test salvataggio...";
-
-    const { error } = await _supabase
-        .from('family_tracker')
-        .update({
-            lat: 41.8902, // Roma
-            lng: 12.4922,
-            last_seen: new Date().toISOString()
-        })
-        .eq('id', myUser.id);
-
-    if (error) {
-        alert("Errore salvataggio: " + error.message);
-        statusEl.innerHTML = "❌ Fallito: " + error.code;
-    } else {
-        alert("Successo! Fabio ora dovrebbe avere coordinate nel DB.");
-        statusEl.innerHTML = "✅ Test OK ☁️";
-        // Trigger a fake location update to show marker
-        onLocationFound({ coords: { latitude: 41.8902, longitude: 12.4922 } });
-    }
-}
-
-function onLocationError(err) {
-    console.warn("GPS Error", err);
-    let msg = "⚠️ In attesa GPS...";
-    if (err.code === 1) msg = "⚠️ Permesso GPS Negato";
-
-    document.getElementById('gps-status').innerHTML = `${msg} <br> <span style="font-size:10px">Riprovo tra 5s...</span>`;
-
-    // Mark as offline in DB immediately
-    markMeOffline();
-
-    // Auto-retry after 5 seconds
-    if (!retryGpsTimeout) {
-        retryGpsTimeout = setTimeout(() => {
-            retryGpsTimeout = null;
-            startTracking();
-        }, 5000);
-    }
-}
-
-async function markMeOffline() {
-    if (!myUser) return;
-    try {
-        await _supabase
-            .from('family_tracker')
-            .update({ last_seen: '1970-01-01T00:00:00Z' })
-            .eq('id', myUser.id);
-    } catch (e) {
-        console.error("Errore markOffline:", e);
-    }
-}
-
-// Admin Toggle
-function toggleMyTracking() {
-    const chk = document.getElementById('tracking-toggle');
-    trackingEnabled = chk.checked;
-    if (trackingEnabled) {
-        startTracking(); // Ensure it runs
-        setStatus('Tracking Attivato');
-    } else {
-        // Stop sending updates (but we still might want to see map, so don't completely kill GPS? 
-        // User said: "disable... detection of my position".
-        // I will keep reading GPS for map centering if needed, but STOP sending to DB.
-        setStatus('Tracking Disattivato');
-    }
-}
-
-// --- REALTIME ---
-function subscribeToChanges() {
-    _supabase
-        .channel('tracker_room')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'family_tracker' }, payload => {
-            const user = payload.new;
-            if (user) updateMarker(user);
-        })
-        .subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-                const { data } = await _supabase.from('family_tracker').select('*').eq('approved', true);
-                if (data) {
-                    const bounds = L.latLngBounds([]);
-                    data.forEach(u => {
-                        updateMarker(u);
-                        if (u.lat && u.lng) bounds.extend([u.lat, u.lng]);
-                    });
-                    // Auto-fit bounds on startup if we have positions
-                    if (bounds.isValid()) {
-                        map.fitBounds(bounds, { padding: [50, 50] });
-                    }
-                }
-            }
-        });
-}
-
-// --- MARKER LOGIC ---
+// --- MARKERS ---
 function updateMarker(user) {
-    // Update Cache
-    const isNew = !allUsersCache[user.id];
-    allUsersCache[user.id] = user;
-    rebuildUserMenu(); // Always rebuild to update online/offline dots
+    // Sincronizza myUser se sono io (importante per aggiornamenti realtime dei gruppi)
+    if (myUser && user.id === myUser.id) {
+        myUser = { ...myUser, ...user };
+    }
 
-    if (!user.lat || !user.lng) {
-        if (user.id === myUser.id) {
-            document.getElementById('gps-status').innerHTML = "🔴 Nessuna posizione salvata. Attiva il GPS!";
+    if (!canISeeUser(user)) {
+        if (markers[user.id]) {
+            markerCluster.removeLayer(markers[user.id]);
+            delete markers[user.id];
         }
+        // Aggiorniamo comunque la cache per il menu e l'admin panel
+        allUsersCache[user.id] = user;
         return;
     }
+
+    allUsersCache[user.id] = user;
+    rebuildUserMenu();
+
+    if (!user.lat || !user.lng) return;
+
     if (user.approved === false && markers[user.id]) {
         markerCluster.removeLayer(markers[user.id]);
         delete markers[user.id];
         return;
     }
 
-    // Calc Direction if we have prev pos
-    let rotation = 0;
-    if (markers[user.id]) {
-        const oldLat = markers[user.id].getLatLng().lat;
-        const oldLng = markers[user.id].getLatLng().lng;
-        // Only rotate if moved significantly
-        if (Math.abs(oldLat - user.lat) > 0.0001 || Math.abs(oldLng - user.lng) > 0.0001) {
-            rotation = calculateBearing(oldLat, oldLng, user.lat, user.lng);
-            markers[user.id].rotation = rotation; // Store it
-        } else {
-            rotation = markers[user.id].rotation || 0;
-        }
-    }
-
-    // Color
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
-
-    // Online/Offline Status
     const lastSeen = new Date(user.last_seen);
-    const now = new Date();
-    const diffMs = now - lastSeen;
-    const diffMins = Math.round(diffMs / 60000);
-    let statusHtml = '';
-    let isOnline = false;
-
-    if (diffMins < 5) {
-        statusHtml = '<span style="color:#22c55e">● Online</span>';
-        isOnline = true;
-    } else {
-        const diffHours = Math.floor(diffMins / 60);
-        const diffDays = Math.floor(diffHours / 24);
-        if (diffDays > 0) statusHtml = `<span style="color:#ef4444">Offline da ${diffDays}gg</span>`;
-        else statusHtml = `<span style="color:#ef4444">Offline da ${diffHours}h</span>`;
-    }
-
-    const statusColor = isOnline ? '#22c55e' : '#ef4444';
-
-    // Popup Content
+    const isOnline = (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
+    const statusColor = isOnline ? '#22c55e' : '#64748b';
     const isMe = (user.id === myUser.id);
-    const isFollowing = (followingUserId === user.id);
-
-    // Distance from me
-    let distanceHtml = '';
-    if (!isMe && myCurrentPos) {
-        const d = map.distance([myCurrentPos.lat, myCurrentPos.lng], [user.lat, user.lng]);
-        distanceHtml = `<div style="font-size:0.9em; color:#94a3b8; margin:5px 0;">📏 ${Math.round(d)} metri</div>`;
-    }
-
-    // Proximity Alert Check
-    if (!isMe && myCurrentPos && isOnline) {
-        const dist = map.distance([myCurrentPos.lat, myCurrentPos.lng], [user.lat, user.lng]);
-        if (dist < 500 && !alertedUsers.has(user.id)) {
-            showToast(`🚀 ${user.name} è vicino a te! (${Math.round(dist)}m)`);
-            alertedUsers.add(user.id);
-            // Reset alert after 30 mins to avoid spam
-            setTimeout(() => alertedUsers.delete(user.id), 30 * 60 * 1000);
-        }
-    }
-    // Safe Zone Check
-    let currentZone = null;
-    safeZonesCache.forEach(zone => {
-        const d = map.distance([user.lat, user.lng], [zone.lat, zone.lng]);
-        if (d < (zone.radius || 150)) currentZone = zone.name;
-    });
-
-    let zoneHtml = currentZone ? `<div class="safe-zone-tag">📍 ${currentZone}</div>` : '';
-
-    const popupContent = `
-        <div style="text-align:center;">
-            <strong style="font-size:1.1em; color:${color}">${user.name}</strong><br>
-            ${statusHtml}
-            ${zoneHtml}
-            ${distanceHtml}
-            
-            <a href="https://www.google.com/maps/search/?api=1&query=${user.lat},${user.lng}" target="_blank" class="popup-btn" style="color:white !important;">
-                🗺️ Google Maps
-            </a>
-            
-            ${!isMe ? `
-                <button onclick="toggleFollow('${user.id}')" class="popup-btn ${isFollowing ? 'following' : 'follow'}">
-                    ${isFollowing ? '🛑 Smetti di Seguire' : '🎯 Segui'}
-                </button>
-                <button onclick="showUserHistory('${user.id}', '${user.name.replace(/'/g, "\\'")}')" class="popup-btn history">
-                    🕒 Vedi Percorso (24h)
-                </button>
-            ` : ''}
+    
+    // Using max-content to allow text to expand nicely
+    const iconHtml = `
+        <div class="${user.speed > 20 ? 'custom-car-marker' : 'custom-map-icon'}" style="transform: rotate(${followingUserId ? currentHeading : 0}deg)">
+            <div style="
+                background-color: ${color}; 
+                color: white; 
+                padding: 4px 10px; 
+                border-radius: 14px; 
+                font-weight: bold; 
+                font-size: 12px; 
+                box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+                text-align: center;
+                border: 2px solid ${statusColor};
+                white-space: nowrap;
+                width: max-content;
+                min-width: 50px;
+            " class="${isMe ? 'pulse-marker' : ''}">
+                ${user.name}
+            </div>
+            <div class="marker-arrow" style="border-bottom-color:${statusColor}"></div>
         </div>
     `;
 
-    // Icon Selection: Pill or Car
-    const isDriving = (user.speed > 20);
-    let customIcon;
+    const customIcon = L.divIcon({
+        className: 'leaflet-data-marker',
+        html: iconHtml,
+        iconSize: [0, 0],
+        iconAnchor: [0, 0]
+    });
 
-    if (isDriving) {
-        customIcon = L.divIcon({
-            className: 'custom-car-marker',
-            html: `
-                <div class="car-icon-container ${isMe ? 'pulse-marker' : ''}">
-                    <div class="car-body" style="border-color: ${statusColor}; color: ${color}">
-                        <i class="ph-fill ph-car"></i>
-                    </div>
-                    <div class="user-name-tag">${user.name}</div>
-                </div>
-            `,
-            iconSize: [0, 0],
-            iconAnchor: [0, 0]
-        });
-    } else {
-        customIcon = L.divIcon({
-            className: 'custom-map-icon',
-            html: `
-                <div style="
-                    display:flex; 
-                    flex-direction: column; 
-                    align-items: center;
-                    transform: translate(-50%, -50%);
-                " class="${isMe ? 'pulse-marker' : ''}">
-                    <div style="
-                        background-color: ${color}; 
-                        color: white; 
-                        padding: 6px 14px; 
-                        border-radius: 20px; 
-                        font-weight: bold; 
-                        font-size: 14px; 
-                        white-space: nowrap; 
-                        box-shadow: 0 3px 8px rgba(0,0,0,0.6);
-                        text-align: center;
-                        border: 3px solid ${statusColor};
-                        min-width: fit-content;
-                        display:flex;
-                        flex-direction:column;
-                        gap: 2px;
-                    ">
-                        <span>${user.name}</span>
-                        ${currentZone ? `<span style="font-size:9px; color:#10b981; font-weight:900;">📍 ${currentZone}</span>` : ''}
-                    </div>
-                    <!-- Direction Arrow -->
-                    <div class="marker-arrow" style="
-                        border-bottom-color: ${statusColor}; 
-                        margin-top: -2px;
-                        transform: rotate(${rotation}deg);
-                    "></div>
-                </div>
-            `,
-            iconSize: [0, 0],
-            iconAnchor: [0, 0]
-        });
-    }
+    const popupContent = `
+        <div style="text-align:center; min-width:150px;">
+            <strong style="color:${color}; font-size:1.1em">${user.name}</strong>
+            <div style="margin:5px 0; font-size:0.85em; color:#cbd5e1;">
+                ${isOnline ? '🟢 Online' : '⚫ Offline da ' + Math.round((new Date()-lastSeen)/60000) + ' min'}
+            </div>
+            <div style="font-size:0.8em; color:#94a3b8">Gruppi: ${(user.allowed_groups || []).join(', ')}</div>
+            
+            ${!isMe ? `
+                <button onclick="toggleFollow('${user.id}')" class="popup-btn ${followingUserId === user.id ? 'following' : 'follow'}">
+                    ${followingUserId === user.id ? 'Smetti di seguire' : 'Segui'}
+                </button>
+            ` : ''}
+            <a href="https://www.google.com/maps/search/?api=1&query=${user.lat},${user.lng}" target="_blank" class="popup-btn" style="background:#475569; margin-top:5px;">Maps</a>
+        </div>
+    `;
 
     if (markers[user.id]) {
         markers[user.id].setLatLng([user.lat, user.lng]);
         markers[user.id].setIcon(customIcon);
-        // Update popup if open
-        if (markers[user.id].getPopup() && markers[user.id].getPopup().isOpen()) {
-            // Don't fully overwrite if user is interacting, but we need to update distance/status
-            // Leaflet doesn't easily update valid popup content without closing.
-            // We'll set content and hopefully it stays open.
-            markers[user.id].setPopupContent(popupContent);
-        } else {
-            markers[user.id].bindPopup(popupContent);
-        }
+        markers[user.id].bindPopup(popupContent);
     } else {
-        const marker = L.marker([user.lat, user.lng], { icon: customIcon, title: user.name });
+        const marker = L.marker([user.lat, user.lng], { icon: customIcon });
         marker.bindPopup(popupContent);
         markerCluster.addLayer(marker);
         markers[user.id] = marker;
-        markers[user.id].rotation = 0;
     }
 
     if (followingUserId === user.id) {
@@ -702,82 +446,275 @@ function updateMarker(user) {
     }
 }
 
-// --- FOLLOW LOGIC ---
-window.toggleFollow = async (id) => {
-    // 1. Toggle State
+window.toggleFollow = (id) => {
     if (followingUserId === id) {
-        followingUserId = null;
-        if (followLine) {
-            map.removeLayer(followLine);
-            followLine = null;
-        }
+        stopFollowing();
     } else {
         followingUserId = id;
+        document.getElementById('follow-mode-indicator').classList.remove('hidden');
         updateFollowLogic();
+        map.closePopup();
+        showToast("Modalità Segui Attiva: Ruota il telefono!");
     }
+}
 
-    // 2. Force Refresh Popup Content (to show "Smetti" or "Segui")
-    // We need to fetch the specific user object to call updateMarker fully, 
-    // OR we can just find the user in our local markers if we stored data?
-    // Current updateMarker relies on 'user' object. 
-    // Let's grab the data efficiently.
-    const { data: user } = await _supabase.from('family_tracker').select('*').eq('id', id).single();
-    if (user) {
-        updateMarker(user); // This regenerates popup html
+window.stopFollowing = () => {
+    followingUserId = null;
+    document.getElementById('follow-mode-indicator').classList.add('hidden');
+    const mapDiv = document.getElementById('map');
+    if (mapDiv) mapDiv.style.transform = 'rotate(0deg)';
+    rotateAllMarkers(0);
+    if (followLine) {
+        map.removeLayer(followLine);
+        followLine = null;
     }
 }
 
 function updateFollowLogic() {
     if (!followingUserId || !myCurrentPos) return;
-
-    const targetMarker = markers[followingUserId];
-    if (!targetMarker) return;
-
-    const targetLatLng = targetMarker.getLatLng();
+    const target = markers[followingUserId];
+    if (!target) return;
+    const targetLatLng = target.getLatLng();
     const myLatLng = [myCurrentPos.lat, myCurrentPos.lng];
-
-    // 1. Draw Line
-    if (followLine) {
-        followLine.setLatLngs([myLatLng, targetLatLng]);
-    } else {
-        followLine = L.polyline([myLatLng, targetLatLng], { color: 'red', weight: 3, dashArray: '5, 10' }).addTo(map);
-    }
-
-    // 2. Fit Bounds (Zoom in/out)
-    // Add padding so markers aren't on edge
-    const bounds = L.latLngBounds([myLatLng, targetLatLng]);
-    // Allow zooming closer in follow mode
-    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 20 });
+    if (followLine) map.removeLayer(followLine);
+    followLine = L.polyline([myLatLng, targetLatLng], { color: '#ef4444', dashArray: '5, 10' }).addTo(map);
+    map.setView(myLatLng, 18, { animate: true });
 }
 
-// --- USER MENU ---
+// --- ADMIN & GROUPS ---
+async function loadGroups() {
+    const { data, error } = await _supabase.from('groups').select('name');
+    if (data) {
+        availableGroups = data.map(g => g.name);
+    } else {
+        console.error("Error loading groups", error);
+        availableGroups = ['famiglia']; // Fallback
+    }
+}
+
+window.createNewGroup = async () => {
+    const newName = prompt("Nome del nuovo gruppo:");
+    if (newName && newName.trim().length > 0) {
+        const name = newName.trim().toLowerCase();
+        const { error } = await _supabase.from('groups').insert([{ name: name }]);
+        if (error) {
+            alert("Errore o gruppo esistente: " + error.message);
+        } else {
+            showToast("Gruppo creato: " + name);
+            await loadGroups();
+            openAdmin(); // Refresh list
+        }
+    }
+}
+
+window.toggleUserGroup = async (userId, groupName, isChecked) => {
+    const user = allUsersCache[userId];
+    if (!user) return;
+    
+    // Create a copy of current groups
+    let currentGroups = [...(user.allowed_groups || [])];
+    
+    if (isChecked) {
+        // Add if not present
+        if (!currentGroups.includes(groupName)) {
+            currentGroups.push(groupName);
+        }
+    } else {
+        // Remove if present
+        currentGroups = currentGroups.filter(g => g !== groupName);
+    }
+    
+    // Optimistic cache update so UI doesn't flicker
+    user.allowed_groups = currentGroups;
+
+    // Aggiornamento immediato per l'utente corrente se sono io, per vedere subito l'effetto
+    if (myUser && userId === myUser.id) {
+        myUser.allowed_groups = currentGroups;
+        // Ricalcola la visibilità di tutti poiché i miei permessi sono cambiati
+        Object.values(allUsersCache).forEach(u => updateMarker(u));
+    }
+    
+    const { error } = await _supabase
+        .from('family_tracker')
+        .update({ allowed_groups: currentGroups })
+        .eq('id', userId);
+        
+    if (error) {
+        alert("Errore aggiornamento gruppi: " + error.message);
+        // Revert cache on error would be ideal, but reload handles it
+        openAdmin();
+    }
+}
+
+window.openAdmin = async () => {
+    document.getElementById('admin-panel').style.display = 'block';
+    const list = document.getElementById('user-list');
+    list.innerHTML = 'Caricamento...';
+    
+    // Parallel fetch
+    await loadGroups();
+    const { data: users } = await _supabase.from('family_tracker').select('*').order('created_at');
+    
+    list.innerHTML = '';
+
+    users.forEach(u => {
+        // Update cache while we are at it
+        allUsersCache[u.id] = u;
+        
+        const userGroups = u.allowed_groups || [];
+
+        // Checkbox List HTML
+        let groupsHtml = '<div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; background:#1e293b; padding:10px; border-radius:8px;">';
+        availableGroups.forEach(g => {
+            const isChecked = userGroups.includes(g);
+            groupsHtml += `
+                <label style="display:flex; align-items:center; gap:6px; color:white; font-size:0.9rem; cursor:pointer;">
+                    <input type="checkbox" 
+                        ${isChecked ? 'checked' : ''} 
+                        onchange="toggleUserGroup('${u.id}', '${g}', this.checked)"
+                        style="width:auto; margin:0;"
+                    >
+                    ${g}
+                </label>
+            `;
+        });
+        groupsHtml += '</div>';
+
+        const div = document.createElement('div');
+        div.className = 'user-row';
+        div.innerHTML = `
+            <div class="user-row-header">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <strong style="color:${getColor(u.name)}">${u.name}</strong> 
+                    <span style="font-size:0.8em; background:${u.approved ? '#22c55e' : '#f59e0b'}; padding:2px 6px; border-radius:4px; color:black;">
+                        ${u.approved ? 'Attivo' : 'In Attesa'}
+                    </span>
+                </div>
+                <div>
+                    ${!u.is_admin ? `
+                        <button onclick="toggleUserApproval('${u.id}', ${!u.approved})" style="padding:4px 8px; width:auto; font-size:0.8em; background:${u.approved ? '#ef4444' : '#22c55e'}">
+                            ${u.approved ? 'Blocca' : 'Approva'}
+                        </button>
+                        <button onclick="deleteUser('${u.id}')" style="padding:4px 8px; width:auto; font-size:0.8em; background:#333;">🗑</button>
+                    ` : '👑 Admin'}
+                </div>
+            </div>
+            <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:5px;">Gruppi visibili:</div>
+            ${groupsHtml}
+        `;
+        list.appendChild(div);
+    });
+}
+
+window.closeAdmin = () => {
+    document.getElementById('admin-panel').style.display = 'none';
+}
+
+window.toggleUserApproval = async (id, status) => {
+    await _supabase.from('family_tracker').update({ approved: status }).eq('id', id);
+    openAdmin();
+}
+
+window.deleteUser = async (id) => {
+    if (confirm("Eliminare utente definitivo?")) {
+        await _supabase.from('family_tracker').delete().eq('id', id);
+        openAdmin();
+    }
+}
+
+// --- UTILS ---
+async function onLocationFound(pos) {
+    const lat = pos.coords.latitude;
+    const lng = pos.coords.longitude;
+    const speed = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+    myCurrentPos = { lat, lng };
+
+    if (trackingEnabled && myUser) {
+        updateMarker({ ...myUser, lat, lng, speed, last_seen: new Date().toISOString() });
+        await _supabase.from('family_tracker').update({
+            lat, lng, speed, last_seen: new Date().toISOString()
+        }).eq('id', myUser.id);
+    }
+}
+
+async function markMeOffline() {
+    if (myUser) {
+        await _supabase.from('family_tracker').update({ last_seen: '2000-01-01' }).eq('id', myUser.id);
+    }
+}
+
+function subscribeToChanges() {
+    _supabase
+        .channel('tracker_room')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'family_tracker' }, payload => {
+            if (payload.new) updateMarker(payload.new);
+        })
+        .subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                const { data } = await _supabase.from('family_tracker').select('*');
+                if (data) data.forEach(u => updateMarker(u));
+            }
+        });
+}
+
+window.fitAllUsers = () => {
+    if (markerCluster) {
+        const bounds = markerCluster.getBounds();
+        if (bounds.isValid()) map.fitBounds(bounds, { padding: [50, 50] });
+        else showToast("Nessun utente visibile");
+    }
+}
+
+function getColor(name) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+    return '#' + '00000'.substring(0, 6 - c.length) + c;
+}
+
+function showToast(msg) {
+    let t = document.querySelector('.toast');
+    if (!t) {
+        t = document.createElement('div');
+        t.className = 'toast';
+        document.body.appendChild(t);
+    }
+    t.innerText = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function requestWakeLock() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+}
+
 window.toggleUserMenu = () => {
     const el = document.getElementById('users-list-dropdown');
-    el.classList.toggle('show');
+    if (el) el.classList.toggle('show');
 }
 
 function rebuildUserMenu() {
     const list = document.getElementById('users-list-dropdown');
+    if (!list) return;
     list.innerHTML = '';
-
     const users = Object.values(allUsersCache).sort((a, b) => a.name.localeCompare(b.name));
-
     if (users.length === 0) {
         list.innerHTML = '<div style="padding:10px; color:#94a3b8; font-size:0.8rem;">Nessun utente</div>';
         return;
     }
-
     users.forEach(u => {
         const div = document.createElement('div');
         div.className = 'menu-user-item';
-        div.onclick = () => zoomToUser(u.id);
-
-        // Status dot logic
+        div.onclick = () => {
+            if (markers[u.id]) {
+                map.flyTo(markers[u.id].getLatLng(), 18);
+                markers[u.id].openPopup();
+            }
+            list.classList.remove('show');
+        };
         const lastSeen = new Date(u.last_seen);
-        const diffMins = (new Date() - lastSeen) / 60000;
-        const isOnline = diffMins < 5;
+        const isOnline = (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
         const color = isOnline ? '#22c55e' : '#ef4444';
-
         div.innerHTML = `
             <span>${u.name}</span>
             <div style="width:8px; height:8px; background:${color}; border-radius:50%;"></div>
@@ -786,123 +723,5 @@ function rebuildUserMenu() {
     });
 }
 
-window.zoomToUser = (id) => {
-    const user = allUsersCache[id];
-    if (user && user.lat && user.lng) {
-        map.flyTo([user.lat, user.lng], 18, { duration: 1.5 });
-        // Close menu
-        document.getElementById('users-list-dropdown').classList.remove('show');
-        // Open popup
-        if (markers[id]) markers[id].openPopup();
-    } else {
-        alert("Posizione non disponibile per questo utente");
-    }
-}
-
-// --- UTILS ---
-function calculateBearing(startLat, startLng, destLat, destLng) {
-    const startLatRad = startLat * (Math.PI / 180);
-    const startLngRad = startLng * (Math.PI / 180);
-    const destLatRad = destLat * (Math.PI / 180);
-    const destLngRad = destLng * (Math.PI / 180);
-
-    const y = Math.sin(destLngRad - startLngRad) * Math.cos(destLatRad);
-    const x = Math.cos(startLatRad) * Math.sin(destLatRad) -
-        Math.sin(startLatRad) * Math.cos(destLatRad) * Math.cos(destLngRad - startLngRad);
-
-    let brng = Math.atan2(y, x);
-    brng = brng * (180 / Math.PI);
-    return (brng + 360) % 360;
-}
-
-function getColor(name) {
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
-    return '#' + '00000'.substring(0, 6 - c.length) + c;
-}
-
-// --- ADMIN ---
-async function openAdmin() {
-    document.getElementById('admin-panel').style.display = 'block';
-    refreshUserList();
-}
-
-function closeAdmin() {
-    document.getElementById('admin-panel').style.display = 'none';
-}
-
-async function refreshUserList() {
-    const list = document.getElementById('user-list');
-    list.innerHTML = 'Caricamento...';
-    const { data: users } = await _supabase.from('family_tracker').select('*').order('created_at');
-    list.innerHTML = '';
-    users.forEach(u => {
-        const div = document.createElement('div');
-        div.className = 'user-row';
-        div.innerHTML = `
-            <div>
-                <strong style="color:${getColor(u.name)}">${u.name}</strong> 
-                <span class="status-badge ${u.approved ? 'approved' : 'pending'}" style="background:${u.approved ? 'var(--success)' : 'grey'}">
-                    ${u.approved ? 'Attivo' : 'Bloccato'}
-                </span>
-                ${u.is_admin ? '<span style="color:gold">👑 Admin</span>' : ''}
-            </div>
-            <div style="display:flex; gap:10px;">
-                ${!u.is_admin ? `
-                    ${u.approved
-                    ? `<button onclick="toggleUser('${u.id}', false)" style="background:var(--danger); padding:0.5rem;">Blocca</button>`
-                    : `<button onclick="toggleUser('${u.id}', true)" style="background:var(--success); padding:0.5rem;">Sblocca</button>`
-                }
-                ` : ''}
-                <button onclick="deleteUser('${u.id}')" style="background:#333; padding:0.5rem;">🗑</button>
-            </div>
-        `;
-        list.appendChild(div);
-    });
-}
-
-window.toggleUser = async (id, status) => {
-    await _supabase.from('family_tracker').update({ approved: status }).eq('id', id);
-    refreshUserList();
-}
-
-window.deleteUser = async (id) => {
-    if (confirm("Sicuro di voler eliminare questo utente?")) {
-        await _supabase.from('family_tracker').delete().eq('id', id);
-        refreshUserList();
-    }
-}
-
-// --- HISTORY LOGIC ---
-window.showUserHistory = async (userId, userName) => {
-    if (historyLayer) {
-        map.removeLayer(historyLayer);
-        historyLayer = null;
-    }
-
-    // Get positions from last 24h
-    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await _supabase
-        .from('location_history')
-        .select('lat, lng')
-        .eq('user_id', userId)
-        .gte('created_at', dayAgo)
-        .order('created_at', { ascending: true });
-
-    if (error || !data || data.length < 2) {
-        return alert("Nessuno storico disponibile per le ultime 24h.");
-    }
-
-    const path = data.map(p => [p.lat, p.lng]);
-    historyLayer = L.polyline(path, {
-        color: getColor(userName),
-        weight: 4,
-        className: 'history-line'
-    }).addTo(map);
-
-    map.fitBounds(historyLayer.getBounds(), { padding: [50, 50] });
-    showToast(`Percorso di ${userName} caricato`);
+async function loadSafeZones() {
 }

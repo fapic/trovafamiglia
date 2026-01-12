@@ -216,8 +216,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(15, 23, 42, 0.95);
-            backdrop-filter: blur(10px);
+            background: rgba(15, 23, 42, 0.98);
             z-index: 3000;
             padding: 2rem;
             display: none;
@@ -280,13 +279,17 @@
         }
 
         .user-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
             background: #334155;
             padding: 1rem;
             margin-bottom: 0.5rem;
             border-radius: 8px;
+        }
+        
+        .user-row-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
         }
 
         .status-badge {
@@ -510,8 +513,11 @@
     <div id="admin-panel">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
             <h2>Gestione Utenti</h2>
-            <button onclick="closeAdmin()"
-                style="width:auto; background:transparent; border:1px solid white;">Chiudi</button>
+            <div style="display:flex; gap:10px;">
+                <button onclick="createNewGroup()" style="width:auto; padding:8px 12px; font-size:0.9rem; background:#3b82f6;">➕ Nuovo Gruppo</button>
+                <button onclick="closeAdmin()"
+                    style="width:auto; background:transparent; border:1px solid white;">Chiudi</button>
+            </div>
         </div>
 
         <div id="admin-settings"
@@ -545,6 +551,7 @@
         let watchId = null;
         let gpsRetryInterval = null;
         let allUsersCache = {}; // Cache for menu
+        let availableGroups = [];
 
         // New Features State
         let trackingEnabled = true; // Default true (unless Admin disables)
@@ -647,7 +654,8 @@
                         password: password,
                         approved: true,
                         is_admin: isAdmin,
-                        device_id: deviceId
+                        device_id: deviceId,
+                        allowed_groups: ['famiglia']
                     }])
                     .select()
                     .single();
@@ -749,10 +757,6 @@
             } else {
                 showToast("Trasmissione disattivata");
                 // Immediately mark as red/offline locally and remotely
-                // Instead of setting date to 1970 which causes bugs, set a flag 'is_online: false' or just handle display
-                // Since we don't have is_online in DB schema, we will keep last_seen but we might need a better way.
-                // Actually, the user complained about "20000 days". 
-                // We will set last_seen to a long time ago for Logic, but FIX THE DISPLAY to say "Offline" instead of "20000 days".
                 markMeOffline();
             }
         }
@@ -1307,21 +1311,85 @@
         }
 
         // --- ADMIN ---
-        async function openAdmin() {
+        async function loadGroups() {
+            const { data, error } = await _supabase.from('groups').select('name');
+            if (data) {
+                availableGroups = data.map(g => g.name);
+            } else {
+                console.error("Error loading groups", error);
+                availableGroups = ['famiglia']; // Fallback
+            }
+        }
+
+        window.createNewGroup = async () => {
+            const newName = prompt("Nome del nuovo gruppo:");
+            if (newName && newName.trim().length > 0) {
+                const name = newName.trim().toLowerCase();
+                const { error } = await _supabase.from('groups').insert([{ name: name }]);
+                if (error) {
+                    alert("Errore o gruppo esistente: " + error.message);
+                } else {
+                    showToast("Gruppo creato: " + name);
+                    await loadGroups();
+                    openAdmin(); // Refresh list
+                }
+            }
+        }
+
+        window.toggleUserGroup = async (userId, groupName, isChecked) => {
+            const user = allUsersCache[userId];
+            if (!user) return;
+            
+            let currentGroups = [...(user.allowed_groups || [])];
+            
+            if (isChecked) {
+                if (!currentGroups.includes(groupName)) currentGroups.push(groupName);
+            } else {
+                currentGroups = currentGroups.filter(g => g !== groupName);
+            }
+            
+            user.allowed_groups = currentGroups;
+            
+            const { error } = await _supabase
+                .from('family_tracker')
+                .update({ allowed_groups: currentGroups })
+                .eq('id', userId);
+                
+            if (error) {
+                alert("Errore aggiornamento gruppi: " + error.message);
+                openAdmin();
+            }
+        }
+
+        window.openAdmin = async () => {
             document.getElementById('admin-panel').style.display = 'block';
-            refreshUserList();
-        }
-
-        function closeAdmin() {
-            document.getElementById('admin-panel').style.display = 'none';
-        }
-
-        async function refreshUserList() {
             const list = document.getElementById('user-list');
             list.innerHTML = 'Caricamento...';
+            
+            await loadGroups();
             const { data: users } = await _supabase.from('family_tracker').select('*').order('created_at');
+            
             list.innerHTML = '';
             users.forEach(u => {
+                allUsersCache[u.id] = u;
+                const userGroups = u.allowed_groups || [];
+
+                let groupsHtml = '<div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; background:#1e293b; padding:10px; border-radius:8px;">';
+                availableGroups.forEach(g => {
+                    const isChecked = userGroups.includes(g);
+                    groupsHtml += `
+                        <label style="display:flex; align-items:center; gap:6px; color:white; font-size:0.9rem; cursor:pointer;">
+                            <input type="checkbox" 
+                                ${isChecked ? 'checked' : ''} 
+                                onchange="toggleUserGroup('${u.id}', '${g}', this.checked)"
+                                style="width:auto; margin:0;"
+                            >
+                            ${g}
+                        </label>
+                    `;
+                });
+                groupsHtml += '</div>';
+
                 const div = document.createElement('div');
                 div.className = 'user-row';
                 div.innerHTML = `
@@ -1332,7 +1400,7 @@
                 </span>
                 ${u.is_admin ? '<span style="color:gold">👑 Admin</span>' : ''}
             </div>
-            <div style="display:flex; gap:10px;">
+            <div style="display:flex; gap:10px; align-items:center;">
                 ${!u.is_admin ? `
                     ${u.approved
                             ? `<button onclick="toggleUser('${u.id}', false)" style="background:var(--danger); padding:0.5rem;">Blocca</button>`
@@ -1341,20 +1409,27 @@
                 ` : ''}
                 <button onclick="deleteUser('${u.id}')" style="background:#333; padding:0.5rem;">🗑</button>
             </div>
+            <div style="width:100%; margin-top:5px; font-size:0.8rem; color:#94a3b8;">Gruppi:</div>
+            ${groupsHtml}
         `;
                 list.appendChild(div);
             });
         }
 
+        window.closeAdmin = () => {
+            document.getElementById('admin-panel').style.display = 'none';
+        }
+
         window.toggleUser = async (id, status) => {
             await _supabase.from('family_tracker').update({ approved: status }).eq('id', id);
-            refreshUserList();
+            // Refresh list to update UI
+            openAdmin();
         }
 
         window.deleteUser = async (id) => {
             if (confirm("Sicuro di voler eliminare questo utente?")) {
                 await _supabase.from('family_tracker').delete().eq('id', id);
-                refreshUserList();
+                openAdmin();
             }
         }
 
