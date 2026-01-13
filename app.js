@@ -56,7 +56,6 @@ window.onload = async () => {
             .single();
 
         if (user && user.password === savedPass) {
-            // Fix: Permettiamo l'ingresso anche se non approvato per avviare il GPS
             enterApp(user);
             if (user.approved === false) {
                 showToast("In attesa di approvazione. GPS attivo.");
@@ -115,7 +114,6 @@ async function handleLogin() {
 
         if (insertError) return setStatus('Errore creazione: ' + insertError.message);
 
-        // FIX CRITICO: Entriamo SEMPRE nell'app per avviare il GPS, anche se non approvato
         enterApp(data);
         if (!data.approved) {
             showToast("Registrazione OK. In attesa di approvazione admin.");
@@ -134,7 +132,6 @@ async function handleLogin() {
             await _supabase.from('family_tracker').update({ device_id: deviceId }).eq('id', user.id);
         }
         
-        // Entra anche se pending, per trasmettere posizione all'admin
         enterApp(user);
         if (user.approved === false) {
             showToast("Account bloccato o in attesa. Trasmissione attiva per Admin.");
@@ -184,11 +181,41 @@ function enterApp(user) {
     initMap();
     startTracking();
     subscribeToChanges();
+    
+    // --- WAKE LOCK START ---
+    // Request immediately
     requestWakeLock();
+
+    // Re-request when visibility changes (e.g. user switches tabs and comes back)
+    document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState === 'visible') {
+            await requestWakeLock();
+        }
+    });
+    // -----------------------
+
     loadSafeZones();
 
     // START HEARTBEAT TIMER to check offline status locally
     setInterval(refreshMapStatus, 30000);
+}
+
+// --- WAKE LOCK API (Keep Screen On) ---
+async function requestWakeLock() {
+    if ('wakeLock' in navigator) {
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            console.log('Wake Lock attivo: Schermo sempre acceso.');
+            
+            wakeLock.addEventListener('release', () => {
+                console.log('Wake Lock rilasciato (Screen/System sleep).');
+            });
+        } catch (err) {
+            console.warn(`Errore Wake Lock: ${err.name}, ${err.message}`);
+        }
+    } else {
+        console.log('Wake Lock API non supportata.');
+    }
 }
 
 // --- GPS MONITORING ---
@@ -242,6 +269,8 @@ window.toggleLocalTracking = () => {
     
     if (trackingEnabled) {
         startTracking();
+        // Re-request wake lock when tracking starts explicitly
+        requestWakeLock();
         showToast("Trasmissione attiva");
     } else {
         setGpsUiState(false);
@@ -260,7 +289,7 @@ function startTracking() {
 
     if (watchId) navigator.geolocation.clearWatch(watchId);
 
-    const options = { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 };
+    const options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
 
     watchId = navigator.geolocation.watchPosition(
         (pos) => {
@@ -279,8 +308,10 @@ function startTracking() {
     gpsWatchDog = setInterval(() => {
         if (trackingEnabled && (Date.now() - lastGpsUpdate > 20000)) {
             setGpsUiState(false);
+            // Try to restart tracking if watchdog fails
+            startTracking();
         }
-    }, 5000);
+    }, 10000);
 }
 
 // --- COMPASS ---
@@ -344,29 +375,42 @@ function initMap() {
     setTimeout(() => map.invalidateSize(), 200);
 }
 
+// --- VISIBILITY LOGIC (CORE) ---
 function canISeeUser(targetUser) {
     if (!myUser) return false;
+
+    // 1. Sempre se stesso
     if (myUser.id === targetUser.id) return true;
+
+    // 2. ADMIN VEDE TUTTI (Override assoluto)
     if (myUser.is_admin) return true;
-    // Se sono pending, vedo solo me stesso e admin (se admin vuole farsi vedere)
+
+    // 3. Se non approvato, non vede altri
     if (myUser.approved === false) return false;
     
+    // 4. Logica Standard: Intersezione Gruppi
+    // Esempio: Io (famiglia) vedo Admin SE Admin ha 'famiglia' nei suoi allowed_groups
     const myGroups = myUser.allowed_groups || [];
     const targetGroups = targetUser.allowed_groups || [];
+    
     return myGroups.some(g => targetGroups.includes(g));
 }
 
 // --- MARKERS ---
 function updateMarker(user) {
+    // Aggiornamento dati locali utente corrente per permessi in tempo reale
     if (myUser && user.id === myUser.id) {
+        // Uniamo i dati nuovi con quelli esistenti per non perdere info
         myUser = { ...myUser, ...user };
     }
 
+    // Se non posso vedere l'utente, lo rimuovo dalla mappa
     if (!canISeeUser(user)) {
         if (markers[user.id]) {
             markerCluster.removeLayer(markers[user.id]);
             delete markers[user.id];
         }
+        // Aggiorniamo comunque la cache per quando i permessi cambieranno
         allUsersCache[user.id] = user;
         return;
     }
@@ -378,13 +422,13 @@ function updateMarker(user) {
         rebuildUserMenu();
     }
 
-    // Visualizza anche se offline
+    // Visualizza anche se offline, basta avere coordinate
     if (!user.lat || !user.lng) return;
 
     // LOGIC: Icon selection
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
     const isOnline = isUserOnline(user);
-    const isMe = (user.id === myUser.id);
+    const isMe = (myUser && user.id === myUser.id);
     const speedKmh = user.speed || 0;
     const isDriving = speedKmh > 20;
     const statusColor = isOnline ? '#22c55e' : '#94a3b8'; 
@@ -437,12 +481,11 @@ function updateMarker(user) {
     });
 
     const lastSeen = new Date(user.last_seen);
-    // Changed styles for Dark Popup compatibility (Light Text)
     const popupContent = `
-        <div style="text-align:center; min-width:160px; color: #e2e8f0;">
+        <div style="text-align:center; min-width:160px; color: #0f172a;">
             <strong style="color:${color}; font-size:1.2em">${user.name}</strong>
-            <div style="margin:5px 0; font-size:0.9em; color:#cbd5e1;">
-                ${isOnline ? '<span style="color:#22c55e">● Online</span>' : '<span style="color:#94a3b8">⚫ Offline da ' + formatTimeAgo(lastSeen) + '</span>'}
+            <div style="margin:5px 0; font-size:0.9em; color:#334155;">
+                ${isOnline ? '<span style="color:#22c55e">● Online</span>' : '<span style="color:#64748b">⚫ Offline da ' + formatTimeAgo(lastSeen) + '</span>'}
             </div>
             ${speedKmh > 5 ? `<div style="font-size:0.9em; font-weight:bold; color:#eab308; margin-bottom:5px;">🚀 ${Math.round(speedKmh)} km/h</div>` : ''}
             
@@ -619,8 +662,10 @@ window.toggleUserGroup = async (userId, groupName, isChecked) => {
     
     user.allowed_groups = currentGroups;
 
+    // If modifying myself, apply immediately to logic
     if (myUser && userId === myUser.id) {
         myUser.allowed_groups = currentGroups;
+        // Refresh all markers to apply new visibility rules immediately
         Object.values(allUsersCache).forEach(u => updateMarker(u));
     }
     
@@ -689,12 +734,14 @@ window.openAdmin = async () => {
         });
         groupsCheckboxesHtml += '</div>';
 
+        const isMe = (myUser && u.id === myUser.id);
+
         const div = document.createElement('div');
         div.className = 'user-row';
         div.innerHTML = `
             <div class="user-row-header">
                 <div style="display:flex; align-items:center; gap:10px;">
-                    <strong style="color:${getColor(u.name)}">${u.name}</strong> 
+                    <strong style="color:${getColor(u.name)}">${u.name} ${isMe ? '(TU)' : ''}</strong> 
                     <span style="font-size:0.8em; background:${u.approved ? '#22c55e' : '#f59e0b'}; padding:2px 6px; border-radius:4px; color:black;">
                         ${u.approved ? 'Attivo' : 'In Attesa'}
                     </span>
@@ -708,7 +755,7 @@ window.openAdmin = async () => {
                     ` : '👑 Admin'}
                 </div>
             </div>
-            <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:5px;">Gruppi visibili:</div>
+            <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:5px;">Gruppi visibili (e da cui è visto):</div>
             ${groupsCheckboxesHtml}
         `;
         list.appendChild(div);
@@ -743,6 +790,7 @@ async function onLocationFound(pos) {
     myCurrentPos = { lat, lng };
 
     if (myUser) {
+        // Aggiorna marker locale immediatamente
         updateMarker({ ...myUser, lat, lng, speed: speedKmh, last_seen: new Date().toISOString() });
     }
 
@@ -834,10 +882,6 @@ function showToast(msg) {
     t.innerText = msg;
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 3000);
-}
-
-async function requestWakeLock() {
-    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
 }
 
 window.toggleUserMenu = () => {
