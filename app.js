@@ -437,11 +437,12 @@ function updateMarker(user) {
     });
 
     const lastSeen = new Date(user.last_seen);
+    // Changed styles for Dark Popup compatibility (Light Text)
     const popupContent = `
-        <div style="text-align:center; min-width:160px; color: #0f172a;">
+        <div style="text-align:center; min-width:160px; color: #e2e8f0;">
             <strong style="color:${color}; font-size:1.2em">${user.name}</strong>
-            <div style="margin:5px 0; font-size:0.9em; color:#334155;">
-                ${isOnline ? '<span style="color:#22c55e">● Online</span>' : '<span style="color:#64748b">⚫ Offline da ' + formatTimeAgo(lastSeen) + '</span>'}
+            <div style="margin:5px 0; font-size:0.9em; color:#cbd5e1;">
+                ${isOnline ? '<span style="color:#22c55e">● Online</span>' : '<span style="color:#94a3b8">⚫ Offline da ' + formatTimeAgo(lastSeen) + '</span>'}
             </div>
             ${speedKmh > 5 ? `<div style="font-size:0.9em; font-weight:bold; color:#eab308; margin-bottom:5px;">🚀 ${Math.round(speedKmh)} km/h</div>` : ''}
             

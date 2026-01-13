@@ -424,17 +424,26 @@ button {
     100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
 }
 
-/* --- LEAFLET POPUP OVERRIDES (High Contrast) --- */
+/* --- LEAFLET POPUP OVERRIDES (Dark Theme & High Contrast) --- */
 .leaflet-popup-content-wrapper, .leaflet-popup-tip {
-    background: #ffffff !important;
-    color: #1e293b !important;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3) !important;
+    background: #1e293b !important; /* Dark Slate background */
+    color: #e2e8f0 !important; /* Light text */
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5) !important;
+    border: 1px solid #475569;
 }
 
 .leaflet-popup-content {
     font-size: 14px;
     font-weight: 500;
-    color: #0f172a !important;
+    color: #e2e8f0 !important;
+}
+
+/* Close button in popup */
+.leaflet-container a.leaflet-popup-close-button {
+    color: #94a3b8 !important;
+}
+.leaflet-container a.leaflet-popup-close-button:hover {
+    color: #f8fafc !important;
 }
 
 /* Link/Button inside Popup */
@@ -442,9 +451,9 @@ a.popup-btn, button.popup-btn {
     display: block;
     width: 100%;
     margin-top: 8px;
-    padding: 8px;
-    font-size: 0.85rem;
-    border-radius: 6px;
+    padding: 10px;
+    font-size: 0.9rem;
+    border-radius: 8px;
     text-align: center;
     background: #3b82f6 !important;
     color: #ffffff !important;
@@ -452,6 +461,8 @@ a.popup-btn, button.popup-btn {
     border: none;
     cursor: pointer;
     box-sizing: border-box;
+    font-weight: 600;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
 a.popup-btn:hover, button.popup-btn:hover {
