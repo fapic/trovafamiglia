@@ -186,6 +186,9 @@ function enterApp(user) {
     subscribeToChanges();
     requestWakeLock();
     loadSafeZones();
+
+    // START HEARTBEAT TIMER to check offline status locally
+    setInterval(refreshMapStatus, 30000);
 }
 
 // --- GPS MONITORING ---
@@ -324,7 +327,7 @@ function initMap() {
         }
     });
 
-    markerCluster = L.markerClusterGroup({
+    markerCluster = L.markerClusterGroup({ 
         maxClusterRadius: 20,
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false,
@@ -369,7 +372,9 @@ function updateMarker(user) {
     }
 
     allUsersCache[user.id] = user;
-    if (document.getElementById('users-list-dropdown')?.classList.contains('show')) {
+    // Check if menu is open to refresh status dots
+    const menu = document.getElementById('users-list-dropdown');
+    if (menu && menu.classList.contains('show')) {
         rebuildUserMenu();
     }
 
@@ -483,7 +488,20 @@ function formatTimeAgo(date) {
 function isUserOnline(user) {
     if (!user.last_seen) return false;
     const lastSeen = new Date(user.last_seen);
-    return (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
+    // Reduced threshold to 3 mins for better "offline" detection
+    return (new Date() - lastSeen) < 3 * 60000 && lastSeen.getFullYear() > 2000;
+}
+
+// --- PERIODIC UI REFRESH (HEARTBEAT) ---
+function refreshMapStatus() {
+    // Re-render markers to update colors (Online/Offline) without waiting for DB changes
+    Object.values(allUsersCache).forEach(u => updateMarker(u));
+    
+    // Also refresh menu if open
+    const menu = document.getElementById('users-list-dropdown');
+    if (menu && menu.classList.contains('show')) {
+        rebuildUserMenu();
+    }
 }
 
 window.toggleFollow = (id) => {
@@ -755,9 +773,15 @@ async function onLocationFound(pos) {
     }
 }
 
+// Attempt to mark offline on unload
+window.addEventListener('beforeunload', () => {
+    markMeOffline();
+});
+
 async function markMeOffline() {
     if (myUser) {
-        await _supabase.from('family_tracker').update({ last_seen: '2000-01-01' }).eq('id', myUser.id);
+        // Use a year far in the past to ensure "Offline"
+        await _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
     }
 }
 
@@ -901,10 +925,10 @@ function rebuildUserMenu() {
                     <span style="font-size:1.2em;">${isOnline ? '🟢' : '😴'}</span>
                 </div>
                 <div style="display:flex; flex-direction:column; overflow:hidden;">
-                    <span style="font-weight:bold; color:#f1f5f9; font-size:0.95rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${u.name}</span>
+                    <span style="font-weight:bold; font-size:0.95rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color: inherit;">${u.name}</span>
                     <span style="font-size:0.75rem; color:${isOnline ? '#86efac' : '#94a3b8'};">${statusText}</span>
                 </div>
-                <i class="ph-bold ph-caret-right" style="margin-left:auto; color:#475569;"></i>
+                <i class="ph-bold ph-caret-right" style="margin-left:auto; opacity: 0.5;"></i>
             </div>
         `;
         list.appendChild(div);

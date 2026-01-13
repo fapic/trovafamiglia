@@ -283,10 +283,13 @@ button {
     align-items: center;
     justify-content: space-between;
     transition: background 0.2s;
+    color: #cbd5e1;
 }
 
-.menu-user-item:hover {
-    background: rgba(59, 130, 246, 0.2);
+.menu-user-item:hover, .menu-user-item:active {
+    background: var(--primary);
+    color: white;
+    font-weight: bold;
 }
 
 .user-row {
