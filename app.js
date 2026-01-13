@@ -215,11 +215,11 @@ function setGpsUiState(isActive) {
     if (isActive) {
         btn.style.borderColor = '#3b82f6';
         dot.style.background = '#22c55e';
-        text.textContent = "GPS ON";
+        if (text) text.textContent = "GPS ON";
     } else {
         btn.style.borderColor = '#ef4444';
         dot.style.background = '#ef4444';
-        text.textContent = "GPS OFF";
+        if (text) text.textContent = "GPS OFF";
     }
 }
 
@@ -415,7 +415,7 @@ function updateMarker(user) {
                     border-radius: 14px; 
                     font-weight: bold; 
                     font-size: 12px; 
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.5); 
                     text-align: center;
                     border: 2px solid ${statusColor};
                     white-space: nowrap;
@@ -438,20 +438,21 @@ function updateMarker(user) {
 
     const lastSeen = new Date(user.last_seen);
     const popupContent = `
-        <div style="text-align:center; min-width:150px;">
-            <strong style="color:${color}; font-size:1.1em">${user.name}</strong>
-            <div style="margin:5px 0; font-size:0.85em; color:#cbd5e1;">
-                ${isOnline ? '🟢 Online' : '⚫ Offline da ' + formatTimeAgo(lastSeen)}
+        <div style="text-align:center; min-width:160px; color: #0f172a;">
+            <strong style="color:${color}; font-size:1.2em">${user.name}</strong>
+            <div style="margin:5px 0; font-size:0.9em; color:#334155;">
+                ${isOnline ? '<span style="color:#22c55e">● Online</span>' : '<span style="color:#64748b">⚫ Offline da ' + formatTimeAgo(lastSeen) + '</span>'}
             </div>
-            ${speedKmh > 5 ? `<div style="font-size:0.9em; font-weight:bold; color:#facc15">🚀 ${Math.round(speedKmh)} km/h</div>` : ''}
-            <div style="font-size:0.8em; color:#94a3b8; margin-top:4px;">Gruppi: ${(user.allowed_groups || []).join(', ')}</div>
+            ${speedKmh > 5 ? `<div style="font-size:0.9em; font-weight:bold; color:#eab308; margin-bottom:5px;">🚀 ${Math.round(speedKmh)} km/h</div>` : ''}
             
             ${!isMe ? `
-                <button onclick="toggleFollow('${user.id}')" class="popup-btn ${followingUserId === user.id ? 'following' : 'follow'}">
-                    ${followingUserId === user.id ? 'Smetti di seguire' : 'Segui'}
+                <button onclick="toggleFollow('${user.id}')" class="popup-btn" style="background-color:${followingUserId === user.id ? '#ef4444' : '#3b82f6'} !important;">
+                    ${followingUserId === user.id ? '🛑 Smetti di seguire' : '🎯 Segui'}
                 </button>
             ` : ''}
-            <a href="https://www.google.com/maps/search/?api=1&query=${user.lat},${user.lng}" target="_blank" class="popup-btn" style="background:#475569; margin-top:5px;">Maps</a>
+            <a href="https://www.google.com/maps/search/?api=1&query=${user.lat},${user.lng}" target="_blank" class="popup-btn">
+                🗺️ Google Maps
+            </a>
         </div>
     `;
 
@@ -488,8 +489,8 @@ function formatTimeAgo(date) {
 function isUserOnline(user) {
     if (!user.last_seen) return false;
     const lastSeen = new Date(user.last_seen);
-    // Reduced threshold to 3 mins for better "offline" detection
-    return (new Date() - lastSeen) < 3 * 60000 && lastSeen.getFullYear() > 2000;
+    // Reduced threshold to 2 mins for better "offline" detection
+    return (new Date() - lastSeen) < 2 * 60000 && lastSeen.getFullYear() > 2000;
 }
 
 // --- PERIODIC UI REFRESH (HEARTBEAT) ---
@@ -775,6 +776,11 @@ async function onLocationFound(pos) {
 
 // Attempt to mark offline on unload
 window.addEventListener('beforeunload', () => {
+    markMeOffline();
+});
+
+// Additional safety for mobile unload
+document.addEventListener('pagehide', () => {
     markMeOffline();
 });
 
