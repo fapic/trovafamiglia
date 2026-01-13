@@ -25,7 +25,7 @@ let lastGpsUpdate = 0;
 let lastDbUpdate = 0;
 let alertedUsers = new Set();
 let safeZonesCache = [];
-let firstLocationSent = false; // Flag per forzare il primo invio
+let firstLocationSent = false;
 
 // Camera Control State
 let isManualControl = false;
@@ -56,11 +56,11 @@ window.onload = async () => {
             .single();
 
         if (user && user.password === savedPass) {
-            if (user.approved === false) {
-                setStatus("Utente in attesa di approvazione dall'Admin.");
-                return;
-            }
+            // Fix: Permettiamo l'ingresso anche se non approvato per avviare il GPS
             enterApp(user);
+            if (user.approved === false) {
+                showToast("In attesa di approvazione. GPS attivo.");
+            }
             return;
         }
     }
@@ -115,10 +115,10 @@ async function handleLogin() {
 
         if (insertError) return setStatus('Errore creazione: ' + insertError.message);
 
-        if (data.approved) {
-            enterApp(data);
-        } else {
-            setStatus("Registrazione avvenuta. Attendi approvazione dell'Admin.");
+        // FIX CRITICO: Entriamo SEMPRE nell'app per avviare il GPS, anche se non approvato
+        enterApp(data);
+        if (!data.approved) {
+            showToast("Registrazione OK. In attesa di approvazione admin.");
         }
 
     } else {
@@ -130,15 +130,15 @@ async function handleLogin() {
             return setStatus('Password errata!');
         }
 
-        if (user.approved === false) {
-            return setStatus("Utente non approvato o bloccato.");
-        }
-
         if (user.device_id !== deviceId) {
             await _supabase.from('family_tracker').update({ device_id: deviceId }).eq('id', user.id);
         }
-
+        
+        // Entra anche se pending, per trasmettere posizione all'admin
         enterApp(user);
+        if (user.approved === false) {
+            showToast("Account bloccato o in attesa. Trasmissione attiva per Admin.");
+        }
     }
 }
 
@@ -306,7 +306,6 @@ function initMap() {
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 22 }).addTo(map);
 
-    // --- GESTIONE INTERAZIONE MANUALE E RESET AUTOMATICO ---
     map.on('mousedown touchstart dragstart zoomstart', () => {
         if (followingUserId) {
             isManualControl = true;
@@ -325,7 +324,7 @@ function initMap() {
         }
     });
 
-    markerCluster = L.markerClusterGroup({ 
+    markerCluster = L.markerClusterGroup({
         maxClusterRadius: 20,
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false,
@@ -346,6 +345,9 @@ function canISeeUser(targetUser) {
     if (!myUser) return false;
     if (myUser.id === targetUser.id) return true;
     if (myUser.is_admin) return true;
+    // Se sono pending, vedo solo me stesso e admin (se admin vuole farsi vedere)
+    if (myUser.approved === false) return false;
+    
     const myGroups = myUser.allowed_groups || [];
     const targetGroups = targetUser.allowed_groups || [];
     return myGroups.some(g => targetGroups.includes(g));
@@ -353,7 +355,6 @@ function canISeeUser(targetUser) {
 
 // --- MARKERS ---
 function updateMarker(user) {
-    // Sincronizza myUser se sono io
     if (myUser && user.id === myUser.id) {
         myUser = { ...myUser, ...user };
     }
@@ -368,28 +369,20 @@ function updateMarker(user) {
     }
 
     allUsersCache[user.id] = user;
-    // Rebuild menu if open to update status dynamically
     if (document.getElementById('users-list-dropdown')?.classList.contains('show')) {
         rebuildUserMenu();
     }
 
-    // Visualizza anche se offline, purché abbia coordinate valide
+    // Visualizza anche se offline
     if (!user.lat || !user.lng) return;
 
-    if (user.approved === false && markers[user.id]) {
-        markerCluster.removeLayer(markers[user.id]);
-        delete markers[user.id];
-        return;
-    }
-
+    // LOGIC: Icon selection
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
     const isOnline = isUserOnline(user);
     const isMe = (user.id === myUser.id);
-    
-    // Logic Speed & Icon
     const speedKmh = user.speed || 0;
     const isDriving = speedKmh > 20;
-    const statusColor = isOnline ? '#22c55e' : '#94a3b8'; // Grey if offline
+    const statusColor = isOnline ? '#22c55e' : '#94a3b8'; 
     
     let iconHtml = '';
     
@@ -431,11 +424,11 @@ function updateMarker(user) {
         `;
     }
 
-    const customIcon = L.divIcon({ // Leaflet non gestisce bene le dimensioni dinamiche nei divIcon senza specificare null
+    const customIcon = L.divIcon({ 
         className: 'leaflet-data-marker',
         html: iconHtml,
         iconSize: [0, 0],
-        iconAnchor: [0, 0] // Centrato via CSS transform
+        iconAnchor: [0, 0]
     });
 
     const lastSeen = new Date(user.last_seen);
@@ -445,7 +438,7 @@ function updateMarker(user) {
             <div style="margin:5px 0; font-size:0.85em; color:#cbd5e1;">
                 ${isOnline ? '🟢 Online' : '⚫ Offline da ' + formatTimeAgo(lastSeen)}
             </div>
-            ${speedKmh > 5 ? `<div style="font-size:0.9em; font-weight:bold; color:#facc15">🚀 ${speedKmh} km/h</div>` : ''}
+            ${speedKmh > 5 ? `<div style="font-size:0.9em; font-weight:bold; color:#facc15">🚀 ${Math.round(speedKmh)} km/h</div>` : ''}
             <div style="font-size:0.8em; color:#94a3b8; margin-top:4px;">Gruppi: ${(user.allowed_groups || []).join(', ')}</div>
             
             ${!isMe ? `
@@ -461,7 +454,6 @@ function updateMarker(user) {
         markers[user.id].setLatLng([user.lat, user.lng]);
         markers[user.id].setIcon(customIcon);
         
-        // Update popup only if content changes significantly or closed
         if (markers[user.id].getPopup()) {
              markers[user.id].setPopupContent(popupContent);
         } else {
@@ -491,8 +483,7 @@ function formatTimeAgo(date) {
 function isUserOnline(user) {
     if (!user.last_seen) return false;
     const lastSeen = new Date(user.last_seen);
-    // Consideriamo offline se > 2 minuti senza aggiornamenti per essere più reattivi sul cambio icona
-    return (new Date() - lastSeen) < 3 * 60000 && lastSeen.getFullYear() > 2000;
+    return (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
 }
 
 window.toggleFollow = (id) => {
@@ -500,7 +491,7 @@ window.toggleFollow = (id) => {
         stopFollowing();
     } else {
         followingUserId = id;
-        isManualControl = false; // Reset manual control when starting to follow
+        isManualControl = false;
         if (idleTimer) clearTimeout(idleTimer);
         
         document.getElementById('follow-mode-indicator').classList.remove('hidden');
@@ -532,12 +523,10 @@ function updateFollowLogic() {
     if (followLine) map.removeLayer(followLine);
     followLine = L.polyline([myLatLng, targetLatLng], { color: '#ef4444', weight: 4, dashArray: '10, 10', opacity: 0.7 }).addTo(map);
     
-    // ZOOM DINAMICO (ADAPTIVE ZOOM)
-    // Modificato padding per spingere gli utenti ai margini estremi
     if (!isManualControl) {
         const bounds = L.latLngBounds([myLatLng, targetLatLng]);
-        // Padding ridotto a [40, 40] per avvicinare ai bordi e aumentare lo zoom interno
-        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 19, animate: true });
+        // ZOOM FIX: Ridotto padding per avvicinare i marker ai bordi
+        map.fitBounds(bounds, { padding: [5, 5], maxZoom: 19, animate: true });
     }
 }
 
@@ -562,7 +551,7 @@ window.createNewGroup = async () => {
         } else {
             showToast("Gruppo creato: " + name);
             await loadGroups();
-            openAdmin(); // Refresh list
+            openAdmin();
         }
     }
 }
@@ -727,40 +716,47 @@ async function onLocationFound(pos) {
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
     // Conversione m/s a km/h
-    const speed = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+    const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
     
     if (!lat || !lng) return;
 
     myCurrentPos = { lat, lng };
 
     if (myUser) {
-        // Immediate local update
-        updateMarker({ ...myUser, lat, lng, speed, last_seen: new Date().toISOString() });
+        updateMarker({ ...myUser, lat, lng, speed: speedKmh, last_seen: new Date().toISOString() });
     }
 
     if (trackingEnabled && myUser) {
         const now = Date.now();
         
-        // BUGFIX NUOVI UTENTI: Se è il primo invio (firstLocationSent false), invia subito senza throttle.
-        // Questo risolve il problema dei nuovi utenti che rimangono "null" se chiudono subito.
         if (!firstLocationSent || now - lastDbUpdate > 3000) {
             lastDbUpdate = now;
             firstLocationSent = true;
             
-            await _supabase.from('family_tracker').update({
+            // Invio dati - Gestione errore se colonna speed manca
+            const updates = {
                 lat,
                 lng,
-                speed: speed, // Assicuriamo che speed venga salvato
+                speed: speedKmh,
                 last_seen: new Date().toISOString()
-            }).eq('id', myUser.id);
+            };
+
+            const { error } = await _supabase.from('family_tracker').update(updates).eq('id', myUser.id);
+            
+            if (error) {
+                console.error("Errore update GPS:", error);
+                // Fallback: se speed fallisce (colonna mancante?), riprova senza speed
+                if (error.message.includes('speed')) {
+                    delete updates.speed;
+                    await _supabase.from('family_tracker').update(updates).eq('id', myUser.id);
+                }
+            }
         }
     }
 }
 
 async function markMeOffline() {
     if (myUser) {
-        // Impostiamo una data vecchia per segnare offline, ma manteniamo le coordinate (non le tocchiamo)
-        // Cosi l'ultima posizione resta visibile agli altri.
         await _supabase.from('family_tracker').update({ last_seen: '2000-01-01' }).eq('id', myUser.id);
     }
 }
