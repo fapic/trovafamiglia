@@ -25,6 +25,7 @@ let lastGpsUpdate = 0;
 let lastDbUpdate = 0;
 let alertedUsers = new Set();
 let safeZonesCache = [];
+let firstLocationSent = false; // Flag per forzare il primo invio
 
 // Camera Control State
 let isManualControl = false;
@@ -281,8 +282,6 @@ function startTracking() {
 
 // --- COMPASS ---
 function initCompass() {
-    // Map rotation disabled as per user request. 
-    // Compass tracking kept in memory just in case, but no UI transform.
     if (window.DeviceOrientationEvent) {
         window.addEventListener('deviceorientation', (e) => {
             let heading = e.webkitCompassHeading || (360 - e.alpha);
@@ -290,10 +289,6 @@ function initCompass() {
             currentHeading = heading;
         });
     }
-}
-
-function rotateAllMarkers(heading) {
-    // No rotation needed on markers if map is fixed North
 }
 
 // --- MAP ---
@@ -312,7 +307,6 @@ function initMap() {
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 22 }).addTo(map);
 
     // --- GESTIONE INTERAZIONE MANUALE E RESET AUTOMATICO ---
-    // Se l'utente tocca la mappa, disabilita il tracking automatico temporaneamente
     map.on('mousedown touchstart dragstart zoomstart', () => {
         if (followingUserId) {
             isManualControl = true;
@@ -320,13 +314,12 @@ function initMap() {
         }
     });
 
-    // Quando l'utente rilascia, avvia il timer di 5 secondi per ripristinare il tracking
     map.on('mouseup touchend dragend zoomend', () => {
         if (followingUserId && isManualControl) {
             if (idleTimer) clearTimeout(idleTimer);
             idleTimer = setTimeout(() => {
                 isManualControl = false;
-                updateFollowLogic(); // Ripristina la vista
+                updateFollowLogic();
                 showToast("Vista automatica ripristinata");
             }, 5000);
         }
@@ -370,7 +363,7 @@ function updateMarker(user) {
             markerCluster.removeLayer(markers[user.id]);
             delete markers[user.id];
         }
-        allUsersCache[user.id] = user; // keep in cache but don't show
+        allUsersCache[user.id] = user;
         return;
     }
 
@@ -380,6 +373,7 @@ function updateMarker(user) {
         rebuildUserMenu();
     }
 
+    // Visualizza anche se offline, purché abbia coordinate valide
     if (!user.lat || !user.lng) return;
 
     if (user.approved === false && markers[user.id]) {
@@ -390,37 +384,58 @@ function updateMarker(user) {
 
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
     const isOnline = isUserOnline(user);
-    const statusColor = isOnline ? '#22c55e' : '#64748b';
     const isMe = (user.id === myUser.id);
     
-    // Using max-content to allow text to expand nicely. Removed rotation style.
-    const iconHtml = `
-        <div class="${user.speed > 20 ? 'custom-car-marker' : 'custom-map-icon'}">
-            <div style="
-                background-color: ${color}; 
-                color: white; 
-                padding: 4px 10px; 
-                border-radius: 14px; 
-                font-weight: bold; 
-                font-size: 12px; 
-                box-shadow: 0 2px 5px rgba(0,0,0,0.5);
-                text-align: center;
-                border: 2px solid ${statusColor};
-                white-space: nowrap;
-                width: max-content;
-                min-width: 50px;
-            " class="${isMe ? 'pulse-marker' : ''}">
-                ${user.name}
+    // Logic Speed & Icon
+    const speedKmh = user.speed || 0;
+    const isDriving = speedKmh > 20;
+    const statusColor = isOnline ? '#22c55e' : '#94a3b8'; // Grey if offline
+    
+    let iconHtml = '';
+    
+    if (isDriving) {
+        // ICONA AUTO (Visualizza velocità + Nome)
+        iconHtml = `
+            <div class="custom-car-marker ${isMe ? 'pulse-marker' : ''} ${!isOnline ? 'offline-marker' : ''}">
+                <div class="speed-badge" style="background:${color}">${Math.round(speedKmh)} km/h</div>
+                <div class="car-body" style="border-color:${statusColor}; color:${color}">
+                    <i class="ph-fill ph-car"></i>
+                </div>
+                <div class="user-name-tag" style="margin-top:2px;">
+                    ${user.name}
+                </div>
             </div>
-            <div class="marker-arrow" style="border-bottom-color:${statusColor}"></div>
-        </div>
-    `;
+        `;
+    } else {
+        // ICONA STANDARD (Pillola Nome)
+        iconHtml = `
+            <div class="custom-map-icon ${isMe ? 'pulse-marker' : ''} ${!isOnline ? 'offline-marker' : ''}">
+                <div style="
+                    background-color: ${color}; 
+                    color: white; 
+                    padding: 4px 10px; 
+                    border-radius: 14px; 
+                    font-weight: bold; 
+                    font-size: 12px; 
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+                    text-align: center;
+                    border: 2px solid ${statusColor};
+                    white-space: nowrap;
+                    width: max-content;
+                    min-width: 50px;
+                ">
+                    ${user.name}
+                </div>
+                <div class="marker-arrow" style="border-bottom-color:${statusColor}"></div>
+            </div>
+        `;
+    }
 
-    const customIcon = L.divIcon({
+    const customIcon = L.divIcon({ // Leaflet non gestisce bene le dimensioni dinamiche nei divIcon senza specificare null
         className: 'leaflet-data-marker',
         html: iconHtml,
         iconSize: [0, 0],
-        iconAnchor: [0, 0]
+        iconAnchor: [0, 0] // Centrato via CSS transform
     });
 
     const lastSeen = new Date(user.last_seen);
@@ -428,9 +443,10 @@ function updateMarker(user) {
         <div style="text-align:center; min-width:150px;">
             <strong style="color:${color}; font-size:1.1em">${user.name}</strong>
             <div style="margin:5px 0; font-size:0.85em; color:#cbd5e1;">
-                ${isOnline ? '🟢 Online' : '⚫ Offline da ' + Math.round((new Date()-lastSeen)/60000) + ' min'}
+                ${isOnline ? '🟢 Online' : '⚫ Offline da ' + formatTimeAgo(lastSeen)}
             </div>
-            <div style="font-size:0.8em; color:#94a3b8">Gruppi: ${(user.allowed_groups || []).join(', ')}</div>
+            ${speedKmh > 5 ? `<div style="font-size:0.9em; font-weight:bold; color:#facc15">🚀 ${speedKmh} km/h</div>` : ''}
+            <div style="font-size:0.8em; color:#94a3b8; margin-top:4px;">Gruppi: ${(user.allowed_groups || []).join(', ')}</div>
             
             ${!isMe ? `
                 <button onclick="toggleFollow('${user.id}')" class="popup-btn ${followingUserId === user.id ? 'following' : 'follow'}">
@@ -444,7 +460,13 @@ function updateMarker(user) {
     if (markers[user.id]) {
         markers[user.id].setLatLng([user.lat, user.lng]);
         markers[user.id].setIcon(customIcon);
-        markers[user.id].bindPopup(popupContent);
+        
+        // Update popup only if content changes significantly or closed
+        if (markers[user.id].getPopup()) {
+             markers[user.id].setPopupContent(popupContent);
+        } else {
+             markers[user.id].bindPopup(popupContent);
+        }
     } else {
         const marker = L.marker([user.lat, user.lng], { icon: customIcon });
         marker.bindPopup(popupContent);
@@ -457,10 +479,20 @@ function updateMarker(user) {
     }
 }
 
+function formatTimeAgo(date) {
+    const diff = new Date() - date;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return mins + ' min';
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return hours + ' h';
+    return Math.floor(hours / 24) + ' gg';
+}
+
 function isUserOnline(user) {
     if (!user.last_seen) return false;
     const lastSeen = new Date(user.last_seen);
-    return (new Date() - lastSeen) < 5 * 60000 && lastSeen.getFullYear() > 2000;
+    // Consideriamo offline se > 2 minuti senza aggiornamenti per essere più reattivi sul cambio icona
+    return (new Date() - lastSeen) < 3 * 60000 && lastSeen.getFullYear() > 2000;
 }
 
 window.toggleFollow = (id) => {
@@ -474,7 +506,7 @@ window.toggleFollow = (id) => {
         document.getElementById('follow-mode-indicator').classList.remove('hidden');
         updateFollowLogic();
         map.closePopup();
-        showToast("Modalità Segui Attiva: Mappa automatica");
+        showToast("Modalità Segui Attiva");
     }
 }
 
@@ -484,7 +516,6 @@ window.stopFollowing = () => {
     if (idleTimer) clearTimeout(idleTimer);
     
     document.getElementById('follow-mode-indicator').classList.add('hidden');
-    // Map always fixed north now, no transform reset needed.
     if (followLine) {
         map.removeLayer(followLine);
         followLine = null;
@@ -499,15 +530,14 @@ function updateFollowLogic() {
     const myLatLng = [myCurrentPos.lat, myCurrentPos.lng];
     
     if (followLine) map.removeLayer(followLine);
-    // Linea più visibile
     followLine = L.polyline([myLatLng, targetLatLng], { color: '#ef4444', weight: 4, dashArray: '10, 10', opacity: 0.7 }).addTo(map);
     
     // ZOOM DINAMICO (ADAPTIVE ZOOM)
-    // Esegui solo se l'utente non sta muovendo la mappa manualmente
+    // Modificato padding per spingere gli utenti ai margini estremi
     if (!isManualControl) {
         const bounds = L.latLngBounds([myLatLng, targetLatLng]);
-        // Padding assicura che i marker non siano sui bordi esatti
-        map.fitBounds(bounds, { padding: [80, 80], maxZoom: 19, animate: true });
+        // Padding ridotto a [40, 40] per avvicinare ai bordi e aumentare lo zoom interno
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 19, animate: true });
     }
 }
 
@@ -517,8 +547,6 @@ async function loadGroups() {
     if (data && data.length > 0) {
         availableGroups = data.map(g => g.name);
     } else {
-        // Fallback: se errore o vuoto, array vuoto o default. 
-        // Manteniamo logica robusta: se c'è errore assumiamo default 'famiglia' per non rompere UI.
         if(error) availableGroups = ['famiglia'];
         else availableGroups = []; 
     }
@@ -542,7 +570,6 @@ window.createNewGroup = async () => {
 window.deleteGroup = async (groupName) => {
     if (!confirm(`Sei sicuro di voler eliminare il gruppo "${groupName}"? Verrà rimosso anche da tutti gli utenti.`)) return;
 
-    // 1. Delete from groups table
     const { error } = await _supabase.from('groups').delete().eq('name', groupName);
     
     if (error) {
@@ -550,9 +577,8 @@ window.deleteGroup = async (groupName) => {
         return;
     }
 
-    showToast(`Gruppo "${groupName}" eliminato. Aggiornamento utenti...`);
+    showToast(`Gruppo "${groupName}" eliminato.`);
 
-    // 2. Cleanup Users (Remove orphan group string)
     const { data: users } = await _supabase.from('family_tracker').select('id, allowed_groups');
     
     if (users) {
@@ -566,7 +592,6 @@ window.deleteGroup = async (groupName) => {
 
     await loadGroups();
     openAdmin();
-    showToast("Gruppo eliminato definitivamente.");
 }
 
 window.toggleUserGroup = async (userId, groupName, isChecked) => {
@@ -611,7 +636,7 @@ window.openAdmin = async () => {
     
     list.innerHTML = '';
 
-    // --- GROUPS MANAGEMENT SECTION ---
+    // --- GROUPS ---
     const groupsDiv = document.createElement('div');
     groupsDiv.className = 'admin-section';
     groupsDiv.style.cssText = 'background:#1e293b; padding:15px; border-radius:12px; margin-bottom:20px; border:1px solid #334155;';
@@ -635,12 +660,10 @@ window.openAdmin = async () => {
     groupsDiv.innerHTML = groupsHtml;
     list.appendChild(groupsDiv);
 
-    // --- USERS LIST ---
+    // --- USERS ---
     users.forEach(u => {
         allUsersCache[u.id] = u;
-        
         const userGroups = u.allowed_groups || [];
-
         let groupsCheckboxesHtml = '<div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; background:#1e293b; padding:10px; border-radius:8px;">';
         availableGroups.forEach(g => {
             const isChecked = userGroups.includes(g);
@@ -703,6 +726,7 @@ window.deleteUser = async (id) => {
 async function onLocationFound(pos) {
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
+    // Conversione m/s a km/h
     const speed = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
     
     if (!lat || !lng) return;
@@ -715,12 +739,19 @@ async function onLocationFound(pos) {
     }
 
     if (trackingEnabled && myUser) {
-        // Throttle DB updates to max once every 3 seconds
         const now = Date.now();
-        if (now - lastDbUpdate > 3000) {
+        
+        // BUGFIX NUOVI UTENTI: Se è il primo invio (firstLocationSent false), invia subito senza throttle.
+        // Questo risolve il problema dei nuovi utenti che rimangono "null" se chiudono subito.
+        if (!firstLocationSent || now - lastDbUpdate > 3000) {
             lastDbUpdate = now;
+            firstLocationSent = true;
+            
             await _supabase.from('family_tracker').update({
-                lat, lng, speed, last_seen: new Date().toISOString()
+                lat,
+                lng,
+                speed: speed, // Assicuriamo che speed venga salvato
+                last_seen: new Date().toISOString()
             }).eq('id', myUser.id);
         }
     }
@@ -728,6 +759,8 @@ async function onLocationFound(pos) {
 
 async function markMeOffline() {
     if (myUser) {
+        // Impostiamo una data vecchia per segnare offline, ma manteniamo le coordinate (non le tocchiamo)
+        // Cosi l'ultima posizione resta visibile agli altri.
         await _supabase.from('family_tracker').update({ last_seen: '2000-01-01' }).eq('id', myUser.id);
     }
 }
@@ -743,7 +776,7 @@ function subscribeToChanges() {
                 const { data } = await _supabase.from('family_tracker').select('*');
                 if (data) {
                     data.forEach(u => updateMarker(u));
-                    fitAllUsers(); // Fit bounds after initial load
+                    fitAllUsers(); 
                 }
             }
         });
@@ -784,11 +817,10 @@ window.toggleUserMenu = () => {
     const el = document.getElementById('users-list-dropdown');
     if (!el) return;
     
-    // Handle hidden class properly
     if (el.classList.contains('hidden')) {
         el.classList.remove('hidden');
         el.classList.add('show');
-        rebuildUserMenu(); // Refresh content when opening
+        rebuildUserMenu();
     } else {
         el.classList.add('hidden');
         el.classList.remove('show');
@@ -800,18 +832,15 @@ function rebuildUserMenu() {
     if (!list) return;
     list.innerHTML = '';
     
-    // Filtra solo gli utenti visibili (in base ai gruppi) e ordinali
     const users = Object.values(allUsersCache)
         .filter(u => canISeeUser(u))
         .sort((a, b) => {
-            // Prima quelli online, poi alfabetico
             const aOnline = isUserOnline(a);
             const bOnline = isUserOnline(b);
             if (aOnline === bOnline) return a.name.localeCompare(b.name);
             return aOnline ? -1 : 1;
         });
 
-    // Add "Fit All" button at the top (Sticky)
     if (users.length > 0) {
         const fitItem = document.createElement('div');
         fitItem.className = 'menu-user-item';
@@ -820,7 +849,7 @@ function rebuildUserMenu() {
         fitItem.onclick = (e) => {
             e.stopPropagation();
             fitAllUsers();
-            toggleUserMenu(); // Close menu after action
+            toggleUserMenu();
         };
         list.appendChild(fitItem);
     }
@@ -848,10 +877,10 @@ function rebuildUserMenu() {
         const timeAgo = Math.floor((new Date() - lastSeenDate) / 60000);
         
         let statusText = 'Online';
-        let statusColor = '#22c55e'; // Green
+        let statusColor = '#22c55e';
         
         if (!isOnline) {
-            statusColor = '#ef4444'; // Red
+            statusColor = '#ef4444';
             if (lastSeenDate.getFullYear() < 2020) {
                 statusText = 'Mai visto';
             } else if (timeAgo < 60) {
@@ -887,7 +916,5 @@ function rebuildUserMenu() {
 }
 
 async function loadSafeZones() {
-    // Implementation for safe zones loading if table exists
-    // const { data } = await _supabase.from('safe_zones').select('*');
-    // if (data) safeZonesCache = data;
+    // Placeholder per zone di sicurezza se necessario
 }
