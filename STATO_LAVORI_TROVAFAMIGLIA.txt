@@ -1,0 +1,26 @@
+*** STORICO LAVORI TROVAFAMIGLIA ***
+
+[STORICO - FUNZIONALITÀ GIÀ IMPLEMENTATE]
+- Zoom modalità "Segui" accentuato.
+- Icona "Macchina" dinamica (> 20 km/h).
+- Persistenza ultima posizione offline.
+- Fix visualizzazione nuovi utenti.
+- Visibilità Admin Avanzata e Wake Lock.
+
+--- SESSIONE DI LAVORO ODIERNA (UX & VISUALIZZAZIONE) ---
+
+[1. CLEANUP INTERFACCIA MAPPA]
+- Rimossa scritta "STOP SEGUI" (follow-mode-indicator) dalla mappa. La gestione resta nel popup utente.
+- Aumentato padding bordi mappa in modalità "Segui" per evitare che i marker finiscano sotto i pulsanti.
+
+[2. FULLSCREEN]
+- Aggiunto pulsante "Fullscreen" (icona frecce) per espandere la mappa a tutto schermo su mobile, nascondendo barre browser.
+
+[3. NUOVA FUNZIONE: RESTA CENTRATO]
+- Implementata funzione "🔒 Resta Centrato" nel popup utente.
+- Permette di bloccare la mappa su un utente specifico (se stessi o altri) senza l'auto-zoom della modalità "Segui".
+- La mappa segue l'utente mantenendolo al centro dello schermo.
+
+[4. OFFLINE ISTANTANEO]
+- Implementato invio segnale offline robusto (keepalive) su chiusura app o disattivazione GPS.
+- Migliorata affidabilità aggiornamento stato per gli altri utenti.

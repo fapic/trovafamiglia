@@ -822,8 +822,8 @@
                 zoomControl: false // Disable default top-left
             }).setView([41.9028, 12.4964], 6);
 
-            L.control.zoom({
-                position: 'bottomright'
+            L.control.zoom({ 
+                position: 'bottomright' 
             }).addTo(map);
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -831,7 +831,7 @@
                 maxZoom: 22
             }).addTo(map);
 
-            markerCluster = L.markerClusterGroup({
+            markerCluster = L.markerClusterGroup({ 
                 maxClusterRadius: 10,
                 spiderfyOnMaxZoom: true,
                 showCoverageOnHover: false,
@@ -839,8 +839,8 @@
                     const markers = cluster.getAllChildMarkers();
                     // List all names separated by a line break
                     const namesHtml = markers.map(m => m.options.title).join('<div style="margin:2px 0;"></div>');
-
-                    return L.divIcon({
+                    
+                    return L.divIcon({ 
                         html: `<div style="
                     background: rgba(15, 23, 42, 0.95);
                     color: white;
@@ -895,7 +895,7 @@
                     options
                 );
             }
-
+            
             launchWatch(true);
         }
 
@@ -935,13 +935,13 @@
                     // 3. Update Database (Priority)
                     const { error: updateError } = await _supabase
                         .from('family_tracker')
-                        .update({
-                            lat: lat,
-                            lng: lng,
+                        .update({ 
+                            lat: lat, 
+                            lng: lng, 
                             speed: speedKmh, // Ensure column exists or update schema if needed (assuming user added it or we just use it logically)
                             // Note: If speed column missing in DB, this might throw error. 
                             // But standard approach is to use what we have.
-                            last_seen: nowIso
+                            last_seen: nowIso 
                         })
                         .eq('id', myUser.id);
 
@@ -966,14 +966,30 @@
         }
 
         async function markMeOffline() {
-            if (!myUser) return;
-            try {
-                await _supabase
-                    .from('family_tracker')
-                    .update({ last_seen: '2000-01-01T00:00:00Z' }) // Use Year 2000 to indicate "Old/Offline" but avoid 1970 bug calc
-                    .eq('id', myUser.id);
-            } catch (e) {
-                console.error("Errore markOffline:", e);
+            if (myUser) {
+                // IMPROVED: Use fetch with keepalive:true to guarantee execution on page close
+                const url = `${PROJECT_URL}/rest/v1/family_tracker?id=eq.${myUser.id}`;
+                const headers = {
+                    'apikey': ANON_KEY,
+                    'Authorization': `Bearer ${ANON_KEY}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=minimal'
+                };
+                const body = JSON.stringify({ last_seen: '2000-01-01T00:00:00Z' });
+
+                if (typeof fetch !== 'undefined') {
+                     fetch(url, {
+                         method: 'PATCH',
+                         headers: headers,
+                         body: body,
+                         keepalive: true
+                     }).catch(err => {
+                         console.warn('Keepalive fetch failed, fallback', err);
+                         _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
+                     });
+                } else {
+                     await _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
+                }
             }
         }
 
@@ -1158,7 +1174,7 @@
                         font-weight: bold; 
                         font-size: 14px; 
                         white-space: nowrap; 
-                        box-shadow: 0 3px 8px rgba(0,0,0,0.6);
+                        box-shadow: 0 3px 8px rgba(0,0,0,0.6); 
                         text-align: center;
                         border: 3px solid ${statusColor};
                         min-width: fit-content;

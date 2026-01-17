@@ -16,6 +16,7 @@ let availableGroups = [];
 // Features State
 let trackingEnabled = true;
 let followingUserId = null;
+let centeredUserId = null; // New: Lock center on user
 let followLine = null;
 let myCurrentPos = null;
 let currentHeading = 0;
@@ -183,10 +184,7 @@ function enterApp(user) {
     subscribeToChanges();
     
     // --- WAKE LOCK START ---
-    // Request immediately
     requestWakeLock();
-
-    // Re-request when visibility changes (e.g. user switches tabs and comes back)
     document.addEventListener('visibilitychange', async () => {
         if (document.visibilityState === 'visible') {
             await requestWakeLock();
@@ -196,7 +194,6 @@ function enterApp(user) {
 
     loadSafeZones();
 
-    // START HEARTBEAT TIMER to check offline status locally
     setInterval(refreshMapStatus, 30000);
 }
 
@@ -269,7 +266,6 @@ window.toggleLocalTracking = () => {
     
     if (trackingEnabled) {
         startTracking();
-        // Re-request wake lock when tracking starts explicitly
         requestWakeLock();
         showToast("Trasmissione attiva");
     } else {
@@ -308,7 +304,6 @@ function startTracking() {
     gpsWatchDog = setInterval(() => {
         if (trackingEnabled && (Date.now() - lastGpsUpdate > 20000)) {
             setGpsUiState(false);
-            // Try to restart tracking if watchdog fails
             startTracking();
         }
     }, 10000);
@@ -345,6 +340,8 @@ function initMap() {
             isManualControl = true;
             if (idleTimer) clearTimeout(idleTimer);
         }
+        // Disable center lock on manual interaction if needed, or let it stick
+        // Ideally if locked, it fights manual control. For now, let's keep it simple.
     });
 
     map.on('mouseup touchend dragend zoomend', () => {
@@ -378,18 +375,10 @@ function initMap() {
 // --- VISIBILITY LOGIC (CORE) ---
 function canISeeUser(targetUser) {
     if (!myUser) return false;
-
-    // 1. Sempre se stesso
     if (myUser.id === targetUser.id) return true;
-
-    // 2. ADMIN VEDE TUTTI (Override assoluto)
     if (myUser.is_admin) return true;
-
-    // 3. Se non approvato, non vede altri
     if (myUser.approved === false) return false;
     
-    // 4. Logica Standard: Intersezione Gruppi
-    // Esempio: Io (famiglia) vedo Admin SE Admin ha 'famiglia' nei suoi allowed_groups
     const myGroups = myUser.allowed_groups || [];
     const targetGroups = targetUser.allowed_groups || [];
     
@@ -398,34 +387,32 @@ function canISeeUser(targetUser) {
 
 // --- MARKERS ---
 function updateMarker(user) {
-    // Aggiornamento dati locali utente corrente per permessi in tempo reale
     if (myUser && user.id === myUser.id) {
-        // Uniamo i dati nuovi con quelli esistenti per non perdere info
         myUser = { ...myUser, ...user };
     }
 
-    // Se non posso vedere l'utente, lo rimuovo dalla mappa
     if (!canISeeUser(user)) {
         if (markers[user.id]) {
             markerCluster.removeLayer(markers[user.id]);
             delete markers[user.id];
         }
-        // Aggiorniamo comunque la cache per quando i permessi cambieranno
         allUsersCache[user.id] = user;
         return;
     }
 
     allUsersCache[user.id] = user;
-    // Check if menu is open to refresh status dots
     const menu = document.getElementById('users-list-dropdown');
     if (menu && menu.classList.contains('show')) {
         rebuildUserMenu();
     }
 
-    // Visualizza anche se offline, basta avere coordinate
     if (!user.lat || !user.lng) return;
 
-    // LOGIC: Icon selection
+    // Handle Center Lock Mode
+    if (centeredUserId === user.id) {
+        map.setView([user.lat, user.lng], map.getZoom(), { animate: true });
+    }
+
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
     const isOnline = isUserOnline(user);
     const isMe = (myUser && user.id === myUser.id);
@@ -436,7 +423,6 @@ function updateMarker(user) {
     let iconHtml = '';
     
     if (isDriving) {
-        // ICONA AUTO (Visualizza velocità + Nome)
         iconHtml = `
             <div class="custom-car-marker ${isMe ? 'pulse-marker' : ''} ${!isOnline ? 'offline-marker' : ''}">
                 <div class="speed-badge" style="background:${color}">${Math.round(speedKmh)} km/h</div>
@@ -449,7 +435,6 @@ function updateMarker(user) {
             </div>
         `;
     } else {
-        // ICONA STANDARD (Pillola Nome)
         iconHtml = `
             <div class="custom-map-icon ${isMe ? 'pulse-marker' : ''} ${!isOnline ? 'offline-marker' : ''}">
                 <div style="
@@ -491,9 +476,14 @@ function updateMarker(user) {
             
             ${!isMe ? `
                 <button onclick="toggleFollow('${user.id}')" class="popup-btn" style="background-color:${followingUserId === user.id ? '#ef4444' : '#3b82f6'} !important;">
-                    ${followingUserId === user.id ? '🛑 Smetti di seguire' : '🎯 Segui'}
+                    ${followingUserId === user.id ? '🛑 Smetti di seguire' : '🎯 Segui (Zoom Auto)'}
                 </button>
             ` : ''}
+
+            <button onclick="toggleCenter('${user.id}')" class="popup-btn" style="background-color:${centeredUserId === user.id ? '#ef4444' : '#10b981'} !important; margin-top:5px;">
+                ${centeredUserId === user.id ? '🔓 Sblocca Mappa' : '🔒 Resta Centrato'}
+            </button>
+
             <a href="https://www.google.com/maps/search/?api=1&query=${user.lat},${user.lng}" target="_blank" class="popup-btn">
                 🗺️ Google Maps
             </a>
@@ -533,16 +523,11 @@ function formatTimeAgo(date) {
 function isUserOnline(user) {
     if (!user.last_seen) return false;
     const lastSeen = new Date(user.last_seen);
-    // Reduced threshold to 2 mins for better "offline" detection
     return (new Date() - lastSeen) < 2 * 60000 && lastSeen.getFullYear() > 2000;
 }
 
-// --- PERIODIC UI REFRESH (HEARTBEAT) ---
 function refreshMapStatus() {
-    // Re-render markers to update colors (Online/Offline) without waiting for DB changes
     Object.values(allUsersCache).forEach(u => updateMarker(u));
-    
-    // Also refresh menu if open
     const menu = document.getElementById('users-list-dropdown');
     if (menu && menu.classList.contains('show')) {
         rebuildUserMenu();
@@ -553,11 +538,16 @@ window.toggleFollow = (id) => {
     if (followingUserId === id) {
         stopFollowing();
     } else {
+        // Disable Center Lock if active to avoid conflicts
+        if (centeredUserId) {
+            centeredUserId = null;
+            showToast("Centraggio disattivato per Segui");
+        }
+
         followingUserId = id;
         isManualControl = false;
         if (idleTimer) clearTimeout(idleTimer);
         
-        document.getElementById('follow-mode-indicator').classList.remove('hidden');
         updateFollowLogic();
         map.closePopup();
         showToast("Modalità Segui Attiva");
@@ -569,11 +559,34 @@ window.stopFollowing = () => {
     isManualControl = false;
     if (idleTimer) clearTimeout(idleTimer);
     
-    document.getElementById('follow-mode-indicator').classList.add('hidden');
+    // Removed overlay hidden logic here as overlay is removed from HTML
     if (followLine) {
         map.removeLayer(followLine);
         followLine = null;
     }
+}
+
+// New Feature: Lock Center on User
+window.toggleCenter = (id) => {
+    if (centeredUserId === id) {
+        centeredUserId = null;
+        showToast("Mappa sbloccata");
+    } else {
+        centeredUserId = id;
+        // Disable Follow Mode if active
+        if (followingUserId) stopFollowing();
+        
+        const user = allUsersCache[id];
+        const name = user ? user.name : 'Utente';
+        showToast(`Mappa centrata su ${name}`);
+        
+        // Center immediately
+        if (user && user.lat && user.lng) {
+            map.setView([user.lat, user.lng], map.getZoom());
+        }
+    }
+    // Update marker popups to reflect state
+    if (allUsersCache[id]) updateMarker(allUsersCache[id]);
 }
 
 function updateFollowLogic() {
@@ -588,8 +601,21 @@ function updateFollowLogic() {
     
     if (!isManualControl) {
         const bounds = L.latLngBounds([myLatLng, targetLatLng]);
-        // ZOOM FIX: Ridotto padding per avvicinare i marker ai bordi
-        map.fitBounds(bounds, { padding: [5, 5], maxZoom: 19, animate: true });
+        // Increased padding to avoid UI overlapping
+        map.fitBounds(bounds, { padding: [80, 80], maxZoom: 19, animate: true });
+    }
+}
+
+// New Feature: Fullscreen Toggle
+window.toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+            console.warn(`Error attempting to enable fullscreen: ${err.message} (${err.name})`);
+        });
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        }
     }
 }
 
@@ -662,10 +688,8 @@ window.toggleUserGroup = async (userId, groupName, isChecked) => {
     
     user.allowed_groups = currentGroups;
 
-    // If modifying myself, apply immediately to logic
     if (myUser && userId === myUser.id) {
         myUser.allowed_groups = currentGroups;
-        // Refresh all markers to apply new visibility rules immediately
         Object.values(allUsersCache).forEach(u => updateMarker(u));
     }
     
@@ -690,7 +714,6 @@ window.openAdmin = async () => {
     
     list.innerHTML = '';
 
-    // --- GROUPS ---
     const groupsDiv = document.createElement('div');
     groupsDiv.className = 'admin-section';
     groupsDiv.style.cssText = 'background:#1e293b; padding:15px; border-radius:12px; margin-bottom:20px; border:1px solid #334155;';
@@ -714,7 +737,6 @@ window.openAdmin = async () => {
     groupsDiv.innerHTML = groupsHtml;
     list.appendChild(groupsDiv);
 
-    // --- USERS ---
     users.forEach(u => {
         allUsersCache[u.id] = u;
         const userGroups = u.allowed_groups || [];
@@ -782,7 +804,6 @@ window.deleteUser = async (id) => {
 async function onLocationFound(pos) {
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
-    // Conversione m/s a km/h
     const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
     
     if (!lat || !lng) return;
@@ -790,18 +811,19 @@ async function onLocationFound(pos) {
     myCurrentPos = { lat, lng };
 
     if (myUser) {
-        // Aggiorna marker locale immediatamente
         updateMarker({ ...myUser, lat, lng, speed: speedKmh, last_seen: new Date().toISOString() });
+        // Auto-center on me if locked
+        if (centeredUserId === myUser.id) {
+            map.setView([lat, lng], map.getZoom(), { animate: true });
+        }
     }
 
     if (trackingEnabled && myUser) {
         const now = Date.now();
-        
         if (!firstLocationSent || now - lastDbUpdate > 3000) {
             lastDbUpdate = now;
             firstLocationSent = true;
             
-            // Invio dati - Gestione errore se colonna speed manca
             const updates = {
                 lat,
                 lng,
@@ -813,7 +835,6 @@ async function onLocationFound(pos) {
             
             if (error) {
                 console.error("Errore update GPS:", error);
-                // Fallback: se speed fallisce (colonna mancante?), riprova senza speed
                 if (error.message.includes('speed')) {
                     delete updates.speed;
                     await _supabase.from('family_tracker').update(updates).eq('id', myUser.id);
@@ -823,20 +844,39 @@ async function onLocationFound(pos) {
     }
 }
 
-// Attempt to mark offline on unload
 window.addEventListener('beforeunload', () => {
     markMeOffline();
 });
 
-// Additional safety for mobile unload
 document.addEventListener('pagehide', () => {
     markMeOffline();
 });
 
 async function markMeOffline() {
     if (myUser) {
-        // Use a year far in the past to ensure "Offline"
-        await _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
+        // IMPROVED: Use fetch with keepalive:true to guarantee execution on page close
+        const url = `${PROJECT_URL}/rest/v1/family_tracker?id=eq.${myUser.id}`;
+        const headers = {
+            'apikey': ANON_KEY,
+            'Authorization': `Bearer ${ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+        };
+        const body = JSON.stringify({ last_seen: '2000-01-01T00:00:00Z' });
+
+        if (typeof fetch !== 'undefined') {
+             fetch(url, {
+                 method: 'PATCH',
+                 headers: headers,
+                 body: body,
+                 keepalive: true
+             }).catch(err => {
+                 console.warn('Keepalive fetch failed, fallback', err);
+                 _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
+             });
+        } else {
+             await _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
+        }
     }
 }
 
@@ -860,7 +900,7 @@ function subscribeToChanges() {
 window.fitAllUsers = () => {
     if (markerCluster) {
         const bounds = markerCluster.getBounds();
-        if (bounds.isValid()) map.fitBounds(bounds, { padding: [50, 50] });
+        if (bounds.isValid()) map.fitBounds(bounds, { padding: [80, 80] });
         else showToast("Nessun utente visibile");
     }
 }
