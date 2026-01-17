@@ -350,7 +350,7 @@ function initMap() {
             idleTimer = setTimeout(() => {
                 isManualControl = false;
                 updateFollowLogic();
-                showToast("Vista automatica ripristinata");
+                // Toast rimosso su richiesta
             }, 5000);
         }
     });
@@ -537,6 +537,8 @@ function refreshMapStatus() {
 window.toggleFollow = (id) => {
     if (followingUserId === id) {
         stopFollowing();
+        // Force refresh of the marker popup to update button text immediately
+        if (allUsersCache[id]) updateMarker(allUsersCache[id]);
     } else {
         // Disable Center Lock if active to avoid conflicts
         if (centeredUserId) {
@@ -550,7 +552,9 @@ window.toggleFollow = (id) => {
         
         updateFollowLogic();
         map.closePopup();
-        showToast("Modalità Segui Attiva");
+        // Toast rimosso su richiesta
+        
+        if (allUsersCache[id]) updateMarker(allUsersCache[id]);
     }
 }
 
