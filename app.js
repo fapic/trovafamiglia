@@ -436,8 +436,8 @@ function updateMarker(user) {
         delete userTrails[user.id];
     }
 
-    // Se si muove (> 5km/h) e è online, aggiorna la scia
-    if (speedKmh > 5 && isOnline) {
+    // Se si muove (> 0.5km/h) e è online, aggiorna la scia (Modificato per pedoni)
+    if (speedKmh > 0.5 && isOnline) {
         userTrailHistory[user.id].push([user.lat, user.lng]);
         
         // Limita la lunghezza della scia (ultimi 20 punti)
