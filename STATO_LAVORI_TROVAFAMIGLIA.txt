@@ -24,3 +24,14 @@
 [4. OFFLINE ISTANTANEO]
 - Implementato invio segnale offline robusto (keepalive) su chiusura app o disattivazione GPS.
 - Migliorata affidabilità aggiornamento stato per gli altri utenti.
+
+--- UPDATE UX SEGUI/STOP ---
+- Rimossi alert "Vista automatica ripristinata" e "Modalità Segui Attiva" per pulizia interfaccia.
+- Migliorata reattività pulsante "Smetti di seguire": ora il testo si aggiorna immediatamente al click, prevenendo loop di attivazione/disattivazione involontaria.
+
+[AGGIUNTA EFFETTO SCIA] - (UPDATE)
+- Migliorata visibilità scia per pedoni: soglia di attivazione abbassata da 5 km/h a 0.5 km/h.
+- Ora la direzione è visibile anche per chi cammina lentamente.
+
+[23/01/2026, 20:48:00] MODIFICA: [VISUALIZZAZIONE DISTANZA] Aggiunto indicatore di distanza (es. '1950 m da Marco') in basso al centro quando si attiva la modalità 'Segui'.
+-----------------------------------

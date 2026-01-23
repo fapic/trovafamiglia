@@ -202,8 +202,6 @@ button {
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
 }
 
-/* follow-mode-indicator removed */
-
 .hidden {
     display: none !important;
 }
@@ -298,6 +296,26 @@ button {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 10px;
+}
+
+/* Distance Display */
+#distance-display {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 23, 42, 0.95);
+    color: #cbd5e1;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border: 1px solid #475569;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    z-index: 4000;
+    white-space: nowrap;
+    pointer-events: none;
+    text-align: center;
 }
 
 /* Toast */

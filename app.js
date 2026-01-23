@@ -621,11 +621,14 @@ window.stopFollowing = () => {
     isManualControl = false;
     if (idleTimer) clearTimeout(idleTimer);
     
-    // Removed overlay hidden logic here as overlay is removed from HTML
     if (followLine) {
         map.removeLayer(followLine);
         followLine = null;
     }
+    
+    // Hide distance display
+    const dEl = document.getElementById('distance-display');
+    if (dEl) dEl.style.display = 'none';
 }
 
 // New Feature: Lock Center on User
@@ -665,6 +668,16 @@ function updateFollowLogic() {
         const bounds = L.latLngBounds([myLatLng, targetLatLng]);
         // Increased padding to avoid UI overlapping
         map.fitBounds(bounds, { padding: [80, 80], maxZoom: 19, animate: true });
+    }
+
+    // Calculate and show distance
+    const dist = map.distance(myLatLng, targetLatLng);
+    const dEl = document.getElementById('distance-display');
+    if (dEl) {
+        const tUser = allUsersCache[followingUserId];
+        const name = tUser ? tUser.name : 'Utente';
+        dEl.innerHTML = `<span style="color:#3b82f6; font-size:1.1em;">${Math.round(dist)} m</span> da ${name}`;
+        dEl.style.display = 'block';
     }
 }
 
