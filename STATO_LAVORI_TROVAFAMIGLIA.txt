@@ -45,3 +45,5 @@
 [24/01/2026, 10:00:00] MODIFICA: Spostata l'etichetta della distanza sopra i pulsanti della mappa (bottom: 200px) per evitare sovrapposizioni e centratura indesiderata.
 [23/01/2026, 21:24:56] MODIFICA: [24/01/2026, 10:30:00] MODIFICA: Spostata l'etichetta della distanza in basso a destra (sotto i pulsanti) su richiesta utente.
 -----------------------------------
+
+[24/01/2026, 11:15:00] MODIFICA: Riposizionato indicatore distanza nell'angolo in basso a destra (bottom: 10px, right: 10px) e ridotta dimensione font per evitare sovrapposizioni.

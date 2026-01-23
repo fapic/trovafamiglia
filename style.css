@@ -301,18 +301,18 @@ button {
 /* Distance Display - MOVED BELOW MAP BUTTONS */
 #distance-display {
     position: fixed !important;
-    bottom: 35px !important;
-    right: 15px !important;
+    bottom: 10px !important;
+    right: 10px !important;
     left: auto !important;
     transform: none !important;
     background: rgba(15, 23, 42, 0.95);
     color: #cbd5e1;
-    padding: 8px 16px;
-    border-radius: 20px;
+    padding: 4px 10px;
+    border-radius: 12px;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.75rem;
     border: 1px solid #475569;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     z-index: 4000;
     white-space: nowrap;
     pointer-events: none;
