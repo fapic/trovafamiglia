@@ -13,6 +13,10 @@ let watchId = null;
 let allUsersCache = {};
 let availableGroups = [];
 
+// Trail State (Scie)
+let userTrails = {};
+let userTrailHistory = {};
+
 // Features State
 let trackingEnabled = true;
 let followingUserId = null;
@@ -396,6 +400,12 @@ function updateMarker(user) {
             markerCluster.removeLayer(markers[user.id]);
             delete markers[user.id];
         }
+        // Rimuovi anche la scia se non vedo più l'utente
+        if (userTrails[user.id]) {
+            map.removeLayer(userTrails[user.id]);
+            delete userTrails[user.id];
+        }
+        userTrailHistory[user.id] = [];
         allUsersCache[user.id] = user;
         return;
     }
@@ -415,8 +425,56 @@ function updateMarker(user) {
 
     const color = user.is_admin ? '#ef4444' : getColor(user.name);
     const isOnline = isUserOnline(user);
-    const isMe = (myUser && user.id === myUser.id);
     const speedKmh = user.speed || 0;
+
+    // --- TRAIL LOGIC (SCIA) ---
+    if (!userTrailHistory[user.id]) userTrailHistory[user.id] = [];
+    
+    // Remove old trail layer if exists to redraw
+    if (userTrails[user.id]) {
+        map.removeLayer(userTrails[user.id]);
+        delete userTrails[user.id];
+    }
+
+    // Se si muove (> 5km/h) e è online, aggiorna la scia
+    if (speedKmh > 5 && isOnline) {
+        userTrailHistory[user.id].push([user.lat, user.lng]);
+        
+        // Limita la lunghezza della scia (ultimi 20 punti)
+        if (userTrailHistory[user.id].length > 20) {
+            userTrailHistory[user.id].shift();
+        }
+        
+        const history = userTrailHistory[user.id];
+        if (history.length > 1) {
+            const trailGroup = L.layerGroup();
+            
+            // Disegna segmenti con opacità crescente (effetto scia aereo)
+            for (let i = 0; i < history.length - 1; i++) {
+                const pt1 = history[i];
+                const pt2 = history[i+1];
+                // L'opacità aumenta verso la testa della scia
+                const opacity = 0.2 + ((i / history.length) * 0.5); 
+
+                L.polyline([pt1, pt2], {
+                    color: color,
+                    weight: 4,
+                    opacity: opacity,
+                    interactive: false,
+                    lineCap: 'round'
+                }).addTo(trailGroup);
+            }
+            
+            trailGroup.addTo(map);
+            userTrails[user.id] = trailGroup;
+        }
+    } else {
+        // Se si ferma o va offline, cancella la scia
+        userTrailHistory[user.id] = [];
+    }
+    // --------------------------
+
+    const isMe = (myUser && user.id === myUser.id);
     const isDriving = speedKmh > 20;
     const statusColor = isOnline ? '#22c55e' : '#94a3b8'; 
     
