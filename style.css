@@ -298,13 +298,13 @@ button {
     margin-bottom: 10px;
 }
 
-/* Distance Display - MOVED TO BOTTOM RIGHT */
+/* Distance Display - MOVED ABOVE MAP BUTTONS */
 #distance-display {
-    position: fixed;
-    bottom: 40px;
-    right: 15px;
-    left: auto;
-    transform: none;
+    position: fixed !important;
+    bottom: 200px !important;
+    right: 15px !important;
+    left: auto !important;
+    transform: none !important;
     background: rgba(15, 23, 42, 0.95);
     color: #cbd5e1;
     padding: 8px 16px;
@@ -317,6 +317,7 @@ button {
     white-space: nowrap;
     pointer-events: none;
     text-align: right;
+    width: auto !important;
 }
 
 /* Toast */
