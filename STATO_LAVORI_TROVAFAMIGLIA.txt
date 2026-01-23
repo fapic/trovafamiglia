@@ -38,3 +38,6 @@
 
 [23/01/2026, 20:59:46] MODIFICA: Fix sovrapposizione scritta distanza con tasto GPS su schermi piccoli (spostato più in alto).
 -----------------------------------
+
+[23/01/2026, 21:10:00] MODIFICA: Spostata etichetta distanza in basso a destra sotto i pulsanti mappa.
+-----------------------------------
