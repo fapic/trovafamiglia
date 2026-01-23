@@ -35,3 +35,6 @@
 
 [23/01/2026, 20:48:00] MODIFICA: [VISUALIZZAZIONE DISTANZA] Aggiunto indicatore di distanza (es. '1950 m da Marco') in basso al centro quando si attiva la modalità 'Segui'.
 -----------------------------------
+
+[23/01/2026, 20:59:46] MODIFICA: Fix sovrapposizione scritta distanza con tasto GPS su schermi piccoli (spostato più in alto).
+-----------------------------------

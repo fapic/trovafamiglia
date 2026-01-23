@@ -301,7 +301,7 @@ button {
 /* Distance Display */
 #distance-display {
     position: fixed;
-    bottom: 30px;
+    bottom: 75px;
     left: 50%;
     transform: translateX(-50%);
     background: rgba(15, 23, 42, 0.95);
