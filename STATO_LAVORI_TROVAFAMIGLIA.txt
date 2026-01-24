@@ -47,3 +47,5 @@
 -----------------------------------
 
 [24/01/2026, 11:15:00] MODIFICA: Riposizionato indicatore distanza nell'angolo in basso a destra (bottom: 10px, right: 10px) e ridotta dimensione font per evitare sovrapposizioni.
+[24/01/2026, 20:54:37] MODIFICA: [24/01/2026, 12:00:00] UPDATE: Added 'Direction Arrow' feature. When following a user, a directional arrow appears on the screen edge indicating the relative direction of the target based on device orientation. Arrow blinks fast red, and turns slow blinking green when target is ahead (+/- 10 degrees). Added relative bearing text display.
+-----------------------------------

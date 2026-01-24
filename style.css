@@ -298,7 +298,7 @@ button {
     margin-bottom: 10px;
 }
 
-/* Distance Display - MOVED BELOW MAP BUTTONS */
+/* Distance & Bearing Display */
 #distance-display {
     position: fixed !important;
     bottom: 10px !important;
@@ -318,6 +318,78 @@ button {
     pointer-events: none;
     text-align: right;
     width: auto !important;
+}
+
+#bearing-display {
+    position: fixed !important;
+    bottom: 45px !important; /* Above distance */
+    right: 10px !important;
+    left: auto !important;
+    background: rgba(15, 23, 42, 0.95);
+    color: #cbd5e1;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.75rem;
+    border: 1px solid #475569;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    z-index: 4000;
+    white-space: nowrap;
+    pointer-events: none;
+    text-align: right;
+    display: none;
+}
+
+/* Direction Arrow */
+#direction-ui {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    z-index: 2000;
+    pointer-events: none;
+    display: none;
+}
+
+#arrow-rotator {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    /* Rotation applied by JS */
+}
+
+#arrow-icon {
+    position: absolute;
+    top: -42vh; /* Push to edge (approx) - adjusted for mobile vertical space */
+    left: -20px;
+    width: 40px;
+    height: 40px;
+    font-size: 40px;
+    line-height: 40px;
+    text-align: center;
+    text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    transition: color 0.3s, opacity 0.3s;
+}
+
+@keyframes blink-red {
+    0%, 100% { opacity: 1; color: #ef4444; }
+    50% { opacity: 0.3; color: #7f1d1d; }
+}
+
+@keyframes blink-green {
+    0%, 100% { opacity: 1; color: #22c55e; text-shadow: 0 0 10px #22c55e; }
+    50% { opacity: 0.5; color: #14532d; }
+}
+
+.arrow-red {
+    animation: blink-red 0.5s infinite;
+}
+
+.arrow-green {
+    animation: blink-green 1.5s infinite;
 }
 
 /* Toast */

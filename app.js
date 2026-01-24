@@ -320,6 +320,7 @@ function initCompass() {
             let heading = e.webkitCompassHeading || (360 - e.alpha);
             if (!heading) return;
             currentHeading = heading;
+            updateDirectionArrow(); // Update arrow rotation on compass change
         });
     }
 }
@@ -626,9 +627,15 @@ window.stopFollowing = () => {
         followLine = null;
     }
     
-    // Hide distance display
+    // Hide displays
     const dEl = document.getElementById('distance-display');
     if (dEl) dEl.style.display = 'none';
+
+    const bEl = document.getElementById('bearing-display');
+    if (bEl) bEl.style.display = 'none';
+
+    const dirUi = document.getElementById('direction-ui');
+    if (dirUi) dirUi.style.display = 'none';
 }
 
 // New Feature: Lock Center on User
@@ -678,6 +685,73 @@ function updateFollowLogic() {
         const name = tUser ? tUser.name : 'Utente';
         dEl.innerHTML = `<span style="color:#3b82f6; font-size:1.1em;">${Math.round(dist)} m</span> da ${name}`;
         dEl.style.display = 'block';
+    }
+    
+    updateDirectionArrow(); // Update arrow on location change
+}
+
+// New Feature: Direction Arrow Logic
+function calculateBearing(startLat, startLng, destLat, destLng) {
+    const startLatRad = startLat * (Math.PI / 180);
+    const startLngRad = startLng * (Math.PI / 180);
+    const destLatRad = destLat * (Math.PI / 180);
+    const destLngRad = destLng * (Math.PI / 180);
+
+    const y = Math.sin(destLngRad - startLngRad) * Math.cos(destLatRad);
+    const x = Math.cos(startLatRad) * Math.sin(destLatRad) -
+              Math.sin(startLatRad) * Math.cos(destLatRad) * Math.cos(destLngRad - startLngRad);
+    let brng = Math.atan2(y, x);
+    brng = (brng * 180 / Math.PI + 360) % 360; // Normalize to 0-360
+    return brng;
+}
+
+function updateDirectionArrow() {
+    if (!followingUserId || !myCurrentPos) {
+        const ui = document.getElementById('direction-ui');
+        if (ui) ui.style.display = 'none';
+        const bEl = document.getElementById('bearing-display');
+        if (bEl) bEl.style.display = 'none';
+        return;
+    }
+
+    const targetUser = allUsersCache[followingUserId];
+    if (!targetUser || !targetUser.lat || !targetUser.lng) return;
+
+    // 1. Calculate Bearing from Me to Target
+    const targetBearing = calculateBearing(myCurrentPos.lat, myCurrentPos.lng, targetUser.lat, targetUser.lng);
+
+    // 2. Calculate Relative Bearing (Target - MyHeading)
+    // currentHeading comes from compass (0=North, 90=East)
+    let relativeBearing = (targetBearing - currentHeading + 360) % 360;
+
+    // 3. Update UI
+    const dirUi = document.getElementById('direction-ui');
+    const arrowRotator = document.getElementById('arrow-rotator');
+    const arrowIcon = document.getElementById('arrow-icon');
+    const bearingDisplay = document.getElementById('bearing-display');
+
+    if (dirUi && arrowRotator && arrowIcon) {
+        dirUi.style.display = 'block';
+        // Rotate container so 'top' aligns with relative bearing
+        arrowRotator.style.transform = `rotate(${relativeBearing}deg)`;
+
+        // Logic: If relative bearing is close to 0 (Target ahead), GREEN & Slow Blink
+        // Tolerance 10 degrees (350-10 or -10 to 10)
+        const isAhead = (relativeBearing < 10 || relativeBearing > 350);
+
+        if (isAhead) {
+            arrowIcon.classList.remove('arrow-red');
+            arrowIcon.classList.add('arrow-green');
+        } else {
+            arrowIcon.classList.remove('arrow-green');
+            arrowIcon.classList.add('arrow-red');
+        }
+    }
+    
+    // 4. Update Text Display
+    if (bearingDisplay) {
+        bearingDisplay.style.display = 'block';
+        bearingDisplay.innerHTML = `Direzione: <strong>${Math.round(relativeBearing)}°</strong>`;
     }
 }
 

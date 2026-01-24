@@ -49,6 +49,15 @@
     <!-- UI OVERLAYS (Outside map wrapper to avoid rotation) -->
     <div id="ui-layer">
         
+        <!-- Direction Arrow Overlay -->
+        <div id="direction-ui">
+            <div id="arrow-rotator">
+                <div id="arrow-icon">
+                    <i class="ph-fill ph-arrow-up"></i>
+                </div>
+            </div>
+        </div>
+
         <!-- GPS Status Overlay -->
         <div id="gps-controls">
             <div id="gps-toggle-btn" onclick="toggleLocalTracking()">
@@ -67,7 +76,10 @@
             <i class="ph ph-arrows-out-simple"></i>
         </div>
 
-        <!-- Distance Display (New) -->
+        <!-- Bearing Display (New) -->
+        <div id="bearing-display" style="display:none;"></div>
+
+        <!-- Distance Display -->
         <div id="distance-display" style="display:none;"></div>
 
         <div id="logout-btn" onclick="doLogout()">Esci</div>
