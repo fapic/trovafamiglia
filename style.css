@@ -306,7 +306,7 @@ button {
     left: auto !important;
     transform: none !important;
     background: rgba(15, 23, 42, 0.95);
-    color: #ffffff;
+    color: #cbd5e1;
     padding: 4px 10px;
     border-radius: 12px;
     font-weight: 600;
@@ -326,7 +326,7 @@ button {
     right: 10px !important;
     left: auto !important;
     background: rgba(15, 23, 42, 0.95);
-    color: #ffffff;
+    color: #cbd5e1;
     padding: 4px 10px;
     border-radius: 12px;
     font-weight: 600;
