@@ -301,18 +301,18 @@ button {
 /* Distance & Bearing Display */
 #distance-display {
     position: fixed !important;
-    bottom: 10px !important;
-    right: 10px !important;
+    bottom: 20px !important;
+    right: 15px !important;
     left: auto !important;
     transform: none !important;
     background: rgba(15, 23, 42, 0.95);
-    color: #cbd5e1;
-    padding: 4px 10px;
-    border-radius: 12px;
-    font-weight: 600;
-    font-size: 0.75rem;
+    color: #ffffff;
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-weight: 650;
+    font-size: 0.85rem;
     border: 1px solid #475569;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.4);
     z-index: 4000;
     white-space: nowrap;
     pointer-events: none;
@@ -320,19 +320,23 @@ button {
     width: auto !important;
 }
 
+#distance-display span {
+    color: #ffffff !important;
+}
+
 #bearing-display {
     position: fixed !important;
-    bottom: 45px !important; /* Above distance */
-    right: 10px !important;
+    bottom: 55px !important;
+    right: 15px !important;
     left: auto !important;
     background: rgba(15, 23, 42, 0.95);
-    color: #cbd5e1;
-    padding: 4px 10px;
-    border-radius: 12px;
-    font-weight: 600;
-    font-size: 0.75rem;
+    color: #ffffff;
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-weight: 650;
+    font-size: 0.85rem;
     border: 1px solid #475569;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.4);
     z-index: 4000;
     white-space: nowrap;
     pointer-events: none;
