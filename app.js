@@ -24,6 +24,7 @@ let centeredUserId = null; // New: Lock center on user
 let followLine = null;
 let myCurrentPos = null;
 let currentHeading = 0;
+let movementCourse = 0; // New: Calculated GPS course
 let wakeLock = null;
 let gpsWatchDog = null;
 let lastGpsUpdate = 0;
@@ -68,7 +69,7 @@ window.onload = async () => {
             return;
         }
     }
-    initCompass();
+    // initCompass(); // Disabled: Using GPS course instead
 };
 
 // --- LOGIN LOGIC ---
@@ -315,6 +316,8 @@ function startTracking() {
 
 // --- COMPASS ---
 function initCompass() {
+    // COMPASS DISABLED: Using GPS Course instead
+    /*
     if (window.DeviceOrientationEvent) {
         window.addEventListener('deviceorientation', (e) => {
             let heading = e.webkitCompassHeading || (360 - e.alpha);
@@ -323,6 +326,7 @@ function initCompass() {
             updateDirectionArrow(); // Update arrow rotation on compass change
         });
     }
+    */
 }
 
 // --- MAP ---
@@ -720,11 +724,14 @@ function updateDirectionArrow() {
     // 1. Calculate Bearing from Me to Target
     const targetBearing = calculateBearing(myCurrentPos.lat, myCurrentPos.lng, targetUser.lat, targetUser.lng);
 
-    // 2. Calculate Relative Bearing (Target - MyHeading)
-    // currentHeading comes from compass (0=North, 90=East)
-    let relativeBearing = (targetBearing - currentHeading + 360) % 360;
+    // 2. Determine Reference Heading (My Movement Course)
+    // User requested GPS-based course instead of compass
+    let referenceHeading = movementCourse;
 
-    // 3. Update UI
+    // 3. Calculate Relative Bearing (Target - MyHeading)
+    let relativeBearing = (targetBearing - referenceHeading + 360) % 360;
+
+    // 4. Update UI
     const dirUi = document.getElementById('direction-ui');
     const arrowRotator = document.getElementById('arrow-rotator');
     const arrowIcon = document.getElementById('arrow-icon');
@@ -748,7 +755,7 @@ function updateDirectionArrow() {
         }
     }
     
-    // 4. Update Text Display
+    // 5. Update Text Display
     if (bearingDisplay) {
         bearingDisplay.style.display = 'block';
         bearingDisplay.innerHTML = `Direzione: <strong>${Math.round(relativeBearing)}°</strong>`;
@@ -957,6 +964,17 @@ async function onLocationFound(pos) {
     
     if (!lat || !lng) return;
 
+    // --- MOVEMENT COURSE CALCULATION START ---
+    if (myCurrentPos) {
+        // Calculate distance to check if we moved enough to calculate a stable course
+        // Using myCurrentPos (previous) and new lat/lng (current)
+        const dist = map.distance([myCurrentPos.lat, myCurrentPos.lng], [lat, lng]);
+        if (dist > 3) { // 3 meters threshold to avoid jitter
+             movementCourse = calculateBearing(myCurrentPos.lat, myCurrentPos.lng, lat, lng);
+        }
+    }
+    // --- MOVEMENT COURSE CALCULATION END ---
+
     myCurrentPos = { lat, lng };
 
     if (myUser) {
@@ -966,6 +984,9 @@ async function onLocationFound(pos) {
             map.setView([lat, lng], map.getZoom(), { animate: true });
         }
     }
+
+    // Update direction arrow immediately when location updates
+    if (followingUserId) updateDirectionArrow();
 
     if (trackingEnabled && myUser) {
         const now = Date.now();
