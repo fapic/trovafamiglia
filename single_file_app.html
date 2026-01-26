@@ -633,6 +633,8 @@
     let alertedUsers = new Set();
     let safeZonesCache = [];
     let firstLocationSent = false;
+    let movementCourse = 0; // New: Calculated GPS course
+    let lastCoursePos = null; // Stabilization
 
     // Camera Control State
     let isManualControl = false;
@@ -1484,6 +1486,24 @@
         const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
         
         if (!lat || !lng) return;
+
+        // --- MOVEMENT COURSE CALCULATION START ---
+        if (!lastCoursePos) {
+            lastCoursePos = { lat, lng };
+        }
+
+        const distFromLastCourse = map.distance([lastCoursePos.lat, lastCoursePos.lng], [lat, lng]);
+        
+        // Stabilizzazione Freccia:
+        // Se la velocità è alta (>5 km/h), aggiorna spesso (soglia 4m).
+        // Se fermo/lento, aggiorna solo se spostamento netto (>8m) per evitare jitter.
+        const courseThreshold = (speedKmh > 5) ? 4 : 8;
+
+        if (distFromLastCourse > courseThreshold) {
+             movementCourse = calculateBearing(lastCoursePos.lat, lastCoursePos.lng, lat, lng);
+             lastCoursePos = { lat, lng };
+        }
+        // --- MOVEMENT COURSE CALCULATION END ---
 
         myCurrentPos = { lat, lng };
 

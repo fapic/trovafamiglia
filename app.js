@@ -25,6 +25,7 @@ let followLine = null;
 let myCurrentPos = null;
 let currentHeading = 0;
 let movementCourse = 0; // New: Calculated GPS course
+let lastCoursePos = null; // Stabilization for GPS course
 let wakeLock = null;
 let gpsWatchDog = null;
 let lastGpsUpdate = 0;
@@ -965,13 +966,20 @@ async function onLocationFound(pos) {
     if (!lat || !lng) return;
 
     // --- MOVEMENT COURSE CALCULATION START ---
-    if (myCurrentPos) {
-        // Calculate distance to check if we moved enough to calculate a stable course
-        // Using myCurrentPos (previous) and new lat/lng (current)
-        const dist = map.distance([myCurrentPos.lat, myCurrentPos.lng], [lat, lng]);
-        if (dist > 3) { // 3 meters threshold to avoid jitter
-             movementCourse = calculateBearing(myCurrentPos.lat, myCurrentPos.lng, lat, lng);
-        }
+    if (!lastCoursePos) {
+        lastCoursePos = { lat, lng };
+    }
+
+    const distFromLastCourse = map.distance([lastCoursePos.lat, lastCoursePos.lng], [lat, lng]);
+    
+    // Stabilizzazione Freccia:
+    // Se la velocità è alta (>5 km/h), aggiorna spesso (soglia 4m).
+    // Se fermo/lento, aggiorna solo se spostamento netto (>8m) per evitare jitter.
+    const courseThreshold = (speedKmh > 5) ? 4 : 8;
+
+    if (distFromLastCourse > courseThreshold) {
+         movementCourse = calculateBearing(lastCoursePos.lat, lastCoursePos.lng, lat, lng);
+         lastCoursePos = { lat, lng };
     }
     // --- MOVEMENT COURSE CALCULATION END ---
 
@@ -1164,7 +1172,8 @@ function rebuildUserMenu() {
             statusColor = '#ef4444';
             if (lastSeenDate.getFullYear() < 2020) {
                 statusText = 'Mai visto';
-            } else if (timeAgo < 60) {
+            }
+            else if (timeAgo < 60) {
                 statusText = `Offline da ${timeAgo}m`;
             } else if (timeAgo < 1440) {
                 statusText = `Offline da ${Math.floor(timeAgo/60)}h`;
