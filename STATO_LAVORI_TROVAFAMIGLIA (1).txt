@@ -1,0 +1,56 @@
+*** STORICO LAVORI TROVAFAMIGLIA ***
+
+[STORICO - FUNZIONALITÀ GIÀ IMPLEMENTATE]
+- Zoom modalità "Segui" accentuato.
+- Icona "Macchina" dinamica (> 20 km/h).
+- Persistenza ultima posizione offline.
+- Fix visualizzazione nuovi utenti.
+- Visibilità Admin Avanzata e Wake Lock.
+
+--- SESSIONE DI LAVORO ODIERNA (UX & VISUALIZZAZIONE) ---
+
+[1. CLEANUP INTERFACCIA MAPPA]
+- Rimossa scritta "STOP SEGUI" (follow-mode-indicator) dalla mappa. La gestione resta nel popup utente.
+- Aumentato padding bordi mappa in modalità "Segui" per evitare che i marker finiscano sotto i pulsanti.
+
+[2. FULLSCREEN]
+- Aggiunto pulsante "Fullscreen" (icona frecce) per espandere la mappa a tutto schermo su mobile, nascondendo barre browser.
+
+[3. NUOVA FUNZIONE: RESTA CENTRATO]
+- Implementata funzione "🔒 Resta Centrato" nel popup utente.
+- Permette di bloccare la mappa su un utente specifico (se stessi o altri) senza l'auto-zoom della modalità "Segui".
+- La mappa segue l'utente mantenendolo al centro dello schermo.
+
+[4. OFFLINE ISTANTANEO]
+- Implementato invio segnale offline robusto (keepalive) su chiusura app o disattivazione GPS.
+- Migliorata affidabilità aggiornamento stato per gli altri utenti.
+
+--- UPDATE UX SEGUI/STOP ---
+- Rimossi alert "Vista automatica ripristinata" e "Modalità Segui Attiva" per pulizia interfaccia.
+- Migliorata reattività pulsante "Smetti di seguire": ora il testo si aggiorna immediatamente al click, prevenendo loop di attivazione/disattivazione involontaria.
+
+[AGGIUNTA EFFETTO SCIA] - (UPDATE)
+- Migliorata visibilità scia per pedoni: soglia di attivazione abbassata da 5 km/h a 0.5 km/h.
+- Ora la direzione è visibile anche per chi cammina lentamente.
+
+[23/01/2026, 20:48:00] MODIFICA: [VISUALIZZAZIONE DISTANZA] Aggiunto indicatore di distanza (es. '1950 m da Marco') in basso al centro quando si attiva la modalità 'Segui'.
+-----------------------------------
+
+[23/01/2026, 20:59:46] MODIFICA: Fix sovrapposizione scritta distanza con tasto GPS su schermi piccoli (spostato più in alto).
+-----------------------------------
+
+[23/01/2026, 21:10:00] MODIFICA: Spostata etichetta distanza in basso a destra sotto i pulsanti mappa.
+-----------------------------------
+
+[24/01/2026, 10:00:00] MODIFICA: Spostata l'etichetta della distanza sopra i pulsanti della mappa (bottom: 200px) per evitare sovrapposizioni e centratura indesiderata.
+[23/01/2026, 21:24:56] MODIFICA: [24/01/2026, 10:30:00] MODIFICA: Spostata l'etichetta della distanza in basso a destra (sotto i pulsanti) su richiesta utente.
+-----------------------------------
+
+[24/01/2026, 11:15:00] MODIFICA: Riposizionato indicatore distanza nell'angolo in basso a destra (bottom: 10px, right: 10px) e ridotta dimensione font per evitare sovrapposizioni.
+[24/01/2026, 20:54:37] MODIFICA: [24/01/2026, 12:00:00] UPDATE: Added 'Direction Arrow' feature. When following a user, a directional arrow appears on the screen edge indicating the relative direction of the target based on device orientation. Arrow blinks fast red, and turns slow blinking green when target is ahead (+/- 10 degrees). Added relative bearing text display.
+-----------------------------------
+[25/01/2026, 10:00:00] MODIFICA: [DIREZIONE FRECCIA] Aggiornata logica freccia direzionale. Ora la direzione viene calcolata basandosi sul vettore di movimento GPS (ultimi 2 punti) invece che sulla bussola magnetica, per garantire coerenza con la mappa orientata a Nord. La freccia indica la direzione dell'utente target rispetto alla direzione di marcia corrente.
+
+[26/01/2026, 07:24:55] MODIFICA: [26/01/2026, 12:30:00] UPDATE: Migliorata stabilizzazione freccia direzionale. Quando la velocità è bassa (fermi o camminata lenta), l'aggiornamento della direzione richiede uno spostamento GPS maggiore (>8m) per evitare oscillazioni dovute al drift del segnale.
+-----------------------------------
+[27/01/2026, 10:00:00] FIX: Risolto bug data last_seen (2000-01-01). Introdotto campo 'is_active' per stato offline istantaneo preservando la data ultima posizione.
