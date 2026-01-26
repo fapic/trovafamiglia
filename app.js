@@ -760,7 +760,8 @@ function updateDirectionArrow() {
     // 5. Update Text Display
     if (bearingDisplay) {
         bearingDisplay.style.display = 'block';
-        bearingDisplay.innerHTML = `Direzione: <strong>${Math.round(relativeBearing)}°</strong>`;
+        // UPDATED: Show target bearing (absolute) instead of relative, per user request
+        bearingDisplay.innerHTML = `Rotta per Target: <strong>${Math.round(targetBearing)}°</strong>`;
     }
 }
 

@@ -351,7 +351,7 @@ button {
     left: 50%;
     width: 0;
     height: 0;
-    z-index: 2000;
+    z-index: 9999;
     pointer-events: none;
     display: none;
 }
@@ -367,12 +367,14 @@ button {
 
 #arrow-icon {
     position: absolute;
-    top: -42vh; /* Push to edge (approx) - adjusted for mobile vertical space */
-    left: -20px;
-    width: 40px;
-    height: 40px;
-    font-size: 40px;
-    line-height: 40px;
+    /* Use min to ensure it fits on narrower dimension (width on portrait) */
+    /* Adjusted to avoid side clipping on phones */
+    top: calc(-1 * min(40vh, 40vw)); 
+    left: -30px;
+    width: 60px;
+    height: 60px;
+    font-size: 60px;
+    line-height: 60px;
     text-align: center;
     text-shadow: 0 2px 5px rgba(0,0,0,0.5);
     transition: color 0.3s, opacity 0.3s;

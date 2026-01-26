@@ -58,3 +58,5 @@
 [27/01/2026, 11:30:00] FIX: Risolto bug timestamp '2000-01-01' alla chiusura. La funzione offline ora aggiorna solo lo stato 'is_active' preservando l'ultimo orario GPS valido.
 -----------------------------------
 [27/01/2026, 17:00:00] FIX: Forzato aggiornamento 'last_seen' con il timestamp corrente alla chiusura dell'app (offline) per evitare che il database ritorni a valori di default (2000-01-01).
+[26/01/2026, 11:03:51] MODIFICA: [28/01/2026, 12:00:00] MODIFICA: Aggiornata logica indicatore direzione: ora mostra la rotta assoluta per raggiungere il target (azimuth) invece della direzione relativa. Ingrandita la freccia rossa rotante e aumentato z-index per evitare sovrapposizioni con i pulsanti mappa.
+-----------------------------------
