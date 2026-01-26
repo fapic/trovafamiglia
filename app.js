@@ -1043,9 +1043,11 @@ async function markMeOffline() {
             'Prefer': 'return=minimal'
         };
         
-        // BUGFIX: Rimosso last_seen dal payload di chiusura per evitare il reset a '2000-01-01'
-        // Manteniamo l'ultimo timestamp valido inviato dal GPS (onLocationFound)
-        const body = JSON.stringify({ is_active: false });
+        // FIX: Forziamo timestamp corrente per evitare reset a date di default (2000-01-01)
+        const body = JSON.stringify({ 
+            is_active: false,
+            last_seen: new Date().toISOString()
+        });
 
         if (typeof fetch !== 'undefined') {
              fetch(url, {
@@ -1055,10 +1057,16 @@ async function markMeOffline() {
                  keepalive: true
              }).catch(err => {
                  console.warn('Keepalive fetch failed, fallback', err);
-                 _supabase.from('family_tracker').update({ is_active: false }).eq('id', myUser.id);
+                 _supabase.from('family_tracker').update({ 
+                     is_active: false,
+                     last_seen: new Date().toISOString()
+                 }).eq('id', myUser.id);
              });
         } else {
-             await _supabase.from('family_tracker').update({ is_active: false }).eq('id', myUser.id);
+             await _supabase.from('family_tracker').update({ 
+                 is_active: false,
+                 last_seen: new Date().toISOString()
+             }).eq('id', myUser.id);
         }
     }
 }
