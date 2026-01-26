@@ -586,8 +586,9 @@ function formatTimeAgo(date) {
 
 function isUserOnline(user) {
     if (!user.last_seen) return false;
+    if (user.is_active === false) return false;
     const lastSeen = new Date(user.last_seen);
-    return (new Date() - lastSeen) < 2 * 60000 && lastSeen.getFullYear() > 2000;
+    return (new Date() - lastSeen) < 2 * 60000;
 }
 
 function refreshMapStatus() {
@@ -1006,7 +1007,8 @@ async function onLocationFound(pos) {
                 lat,
                 lng,
                 speed: speedKmh,
-                last_seen: new Date().toISOString()
+                last_seen: new Date().toISOString(),
+                is_active: true
             };
 
             const { error } = await _supabase.from('family_tracker').update(updates).eq('id', myUser.id);
@@ -1040,7 +1042,10 @@ async function markMeOffline() {
             'Content-Type': 'application/json',
             'Prefer': 'return=minimal'
         };
-        const body = JSON.stringify({ last_seen: '2000-01-01T00:00:00Z' });
+        
+        // BUGFIX: Rimosso last_seen dal payload di chiusura per evitare il reset a '2000-01-01'
+        // Manteniamo l'ultimo timestamp valido inviato dal GPS (onLocationFound)
+        const body = JSON.stringify({ is_active: false });
 
         if (typeof fetch !== 'undefined') {
              fetch(url, {
@@ -1050,10 +1055,10 @@ async function markMeOffline() {
                  keepalive: true
              }).catch(err => {
                  console.warn('Keepalive fetch failed, fallback', err);
-                 _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
+                 _supabase.from('family_tracker').update({ is_active: false }).eq('id', myUser.id);
              });
         } else {
-             await _supabase.from('family_tracker').update({ last_seen: '2000-01-01T00:00:00Z' }).eq('id', myUser.id);
+             await _supabase.from('family_tracker').update({ is_active: false }).eq('id', myUser.id);
         }
     }
 }

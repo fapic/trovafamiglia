@@ -53,3 +53,6 @@
 
 [26/01/2026, 07:24:55] MODIFICA: [26/01/2026, 12:30:00] UPDATE: Migliorata stabilizzazione freccia direzionale. Quando la velocità è bassa (fermi o camminata lenta), l'aggiornamento della direzione richiede uno spostamento GPS maggiore (>8m) per evitare oscillazioni dovute al drift del segnale.
 -----------------------------------
+[27/01/2026, 10:00:00] FIX: Risolto bug data last_seen (2000-01-01). Introdotto campo 'is_active' per stato offline istantaneo preservando la data ultima posizione.
+-----------------------------------
+[27/01/2026, 11:30:00] FIX: Risolto bug timestamp '2000-01-01' alla chiusura. La funzione offline ora aggiorna solo lo stato 'is_active' preservando l'ultimo orario GPS valido.
